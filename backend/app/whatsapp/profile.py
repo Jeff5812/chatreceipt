@@ -6,15 +6,22 @@ something the bot understands: `tests/test_whatsapp_units.py` checks each one ag
 
 from __future__ import annotations
 
-# Shown under the business name (Meta allows 139 characters).
-ABOUT = "Send me chat screenshots and I'll turn the deal into a receipt you can share."
+# The display name Meta shows for the number (approved separately; see `scripts/whatsapp_profile.py register`).
+DISPLAY_NAME = "ChatReceipt"
 
-# The business profile's description (Meta allows 512 characters).
+# The short "about" line (Meta allows 139 characters).
+ABOUT = "Turns chat screenshots into receipts: what was agreed, paid and still owed."
+
+# The business profile's description (Meta allows 512 characters). Short lines read better in the app.
 DESCRIPTION = (
-    "ChatReceipt turns screenshots of a WhatsApp, Instagram or SMS chat into a clear record of the deal: "
-    "what was agreed, what has been paid and what is still owed. Send the screenshots here, check the details "
-    "and confirm to get the receipt as an image and a PDF. ChatReceipt records what the chat says; it doesn't "
-    "verify payments."
+    "Turn a WhatsApp, Instagram or SMS chat into a clear receipt.\n"
+    "\n"
+    "1. Send screenshots of the chat\n"
+    "2. Check the details I find\n"
+    "3. Confirm, and get the receipt as an image and a PDF\n"
+    "\n"
+    "Each receipt shows what was agreed, what has been paid and what is still owed. "
+    "Payments are recorded as the chat describes them, not verified."
 )
 
 VERTICAL = "PROF_SERVICES"

@@ -68,8 +68,8 @@ A phase counts as complete only when it works and its tests pass.
 - **Pipeline split:** the website and WhatsApp still use the single-step extraction; only `/api/v1` uses the engine pipeline.
 - **Different models:** the evaluation measured `gemini-3.5-flash-lite`, not `gemini-2.5-flash`, which the live channels use.
 - **Temporary storage on the free host:** the engine keeps files in local storage, so on Render's free plan uploads and receipts under `/api/v1` don't survive a restart.
-- **Docker build unverified:** the image hasn't been built locally, because Docker Desktop wasn't running.
-- **Display name:** Meta has approved "ChatReceipt", but it only shows after the number is registered again, which needs WhatsApp Manager or the number's two-step verification PIN.
+- **Render build not yet run:** the Docker image builds and works locally under Render's free limits (512 MB, a tenth of a CPU), but Render's own first build is still to come. A PDF there takes 10–20 seconds, and the first one about 45.
+- **Business number stays visible:** WhatsApp always shows a business's number. The display name is "ChatReceipt" since 2026-11-19, applied by registering the number again.
 
 ## Deferred
 

@@ -4,6 +4,7 @@ usage (from backend/, with the WHATSAPP_* settings in .env):
     python -m scripts.whatsapp_profile show
     python -m scripts.whatsapp_profile apply --picture ../docs/brand/whatsapp-profile.png
     python -m scripts.whatsapp_profile apply --website https://chatreceipt.vercel.app
+    python -m scripts.whatsapp_profile register     # apply an approved display name
 
 The text comes from app/whatsapp/profile.py. "apply" turns on Meta's welcome message: when someone opens
 the chat for the first time, Meta sends a request_welcome event and the bot answers with its welcome.
@@ -113,6 +114,34 @@ def apply(meta: Meta, picture: Path | None, website: str | None) -> None:
     print("Welcome message, suggestions and commands set.")
 
 
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+PIN_KEY = "WHATSAPP_REGISTRATION_PIN"
+
+
+def registration_pin() -> str:
+    """The number's two-step verification PIN: from the environment or backend/.env, or a new one saved there."""
+    pin = os.environ.get(PIN_KEY, "").strip()
+    if not pin and ENV_FILE.exists():
+        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+            if line.startswith(f"{PIN_KEY}="):
+                pin = line.split("=", 1)[1].strip()
+    if pin:
+        return pin
+    import secrets
+
+    pin = f"{secrets.randbelow(10**6):06d}"
+    with ENV_FILE.open("a", encoding="utf-8") as env:
+        env.write(f"\n# Two-step verification PIN for the WhatsApp number. Meta asks for it to register the number again.\n{PIN_KEY}={pin}\n")
+    print(f"A new two-step verification PIN was saved as {PIN_KEY} in backend/.env. Keep it.")
+    return pin
+
+
+def register(meta: Meta) -> None:
+    """Register the number again with its PIN, which is how Meta applies an approved new display name."""
+    meta.call("POST", f"{meta.phone}/register", json={"messaging_product": "whatsapp", "pin": registration_pin()})
+    print("Number registered again; an approved display name shows within a few minutes.")
+
+
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -121,10 +150,13 @@ def main() -> None:
     do = sub.add_parser("apply", help="Set everything from app/whatsapp/profile.py.")
     do.add_argument("--picture", type=Path, help="A square PNG or JPEG, 640x640 recommended.")
     do.add_argument("--website", help="The website address to list on the profile.")
+    sub.add_parser("register", help="Register the number again to apply an approved display name.")
     args = parser.parse_args()
     meta = Meta()
     if args.action == "apply":
         apply(meta, args.picture, args.website)
+    elif args.action == "register":
+        register(meta)
     show(meta)
 
 

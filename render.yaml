@@ -37,6 +37,9 @@ services:
         value: "true"
       - key: CLIENT_IP_HEADER
         value: cf-connecting-ip
+      # On the free plan's tenth of a CPU, Chromium's first start takes about 45 seconds.
+      - key: DOCUMENT_TIMEOUT_SECONDS
+        value: "90"
       - key: WHATSAPP_ACCESS_TOKEN
         sync: false
       - key: WHATSAPP_PHONE_NUMBER_ID

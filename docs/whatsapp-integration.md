@@ -171,7 +171,10 @@ Add `--website https://<your-site>` once the website is hosted. A test checks th
 command reaches a command the bot understands.
 
 The display name is set separately. Meta approves a new name, and it shows once the number is registered
-again: in WhatsApp Manager, or through the API with the number's two-step verification PIN.
+again: `python -m scripts.whatsapp_profile register` does that with the number's two-step verification
+PIN, which it keeps as `WHATSAPP_REGISTRATION_PIN` in `backend/.env` (creating one the first time). The
+business's phone number always stays visible on WhatsApp; usernames hide customers' numbers, not a
+business's.
 
 ### 7. Test with a real phone
 

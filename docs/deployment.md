@@ -20,8 +20,10 @@ ordinary always-on process while it is awake.
   sent while the API is waking arrives late rather than being lost. Background work (WhatsApp replies,
   receipts) pauses while it sleeps and resumes when the next request wakes it. Render's 750 free instance
   hours a month cover one service running all month.
-- **Render gives 512 MB of memory.** Chromium stays loaded after the first PDF or PNG, so printing is the
-  part most likely to run short. If Render reports the service ran out of memory, that's the cause.
+- **Render gives 512 MB of memory and a tenth of a CPU.** Tested locally with the same limits
+  (2026-11-19): the API uses about 115 MB at rest and 245 MB after printing. A PDF or PNG takes 10–20
+  seconds, and the first one after the API starts about 45 seconds while Chromium starts, which is why
+  `render.yaml` sets `DOCUMENT_TIMEOUT_SECONDS` to 90 (the default is 30).
 - **Render's disk is temporary.** Files written by the engine's v1 API (uploads and issued receipts under
   `backend/var`) are lost when the service restarts. The website and the WhatsApp channel don't keep files.
 - **Gemini's free tier allows about 20 requests a day per model.** ChatReceipt uses `gemini-2.5-flash` for
@@ -99,7 +101,16 @@ Meta calls the API to check the verify token, so the API must be awake (open `/a
   on the previous deploy in Render. Database migrations aren't undone by a rollback, so keep them
   backward-compatible.
 
-## Not yet verified
+## What has been checked
 
-The Docker image hasn't been built on this computer (Docker Desktop wasn't running), so Render's first
-build is its first real build. If it fails, the build log names the step.
+The Docker image builds (2 GB, most of it Chromium) and was run on 2026-11-19 with Render's free limits
+(`docker run --memory 512m --cpus 0.1`): health, settings, a calculation, and a real PDF and PNG all
+worked, without running out of memory. Render builds the image on its own servers, so its first build is
+still the first real one; if it fails, the build log names the step.
+
+To run the same image yourself:
+
+```bash
+docker build -t chatreceipt-api backend
+docker run --rm -p 18080:8000 --memory 512m --cpus 0.1 -e DOCUMENT_TIMEOUT_SECONDS=90 chatreceipt-api
+```
