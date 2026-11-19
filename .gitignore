@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Evaluation results (contain model output for the synthetic cases)
+backend/evals/results/
+
+# Uploaded files and receipts kept by the engine's local storage
+backend/var/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs, OS, editor
+*.log
+.DS_Store
+Thumbs.db
+.vscode/

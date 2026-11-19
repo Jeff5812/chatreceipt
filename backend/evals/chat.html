@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 390px; font-family: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; background: #efe7dc; color: #111; }
+  .status { display: flex; justify-content: space-between; padding: 12px 22px 6px; font-size: 14px; font-weight: 600; background: #f6f6f6; }
+  .header { display: flex; align-items: center; gap: 10px; padding: 8px 14px 10px; background: #f6f6f6; border-bottom: 1px solid #ddd; }
+  .back { color: #1f7a55; font-size: 22px; line-height: 1; }
+  .avatar { width: 36px; height: 36px; border-radius: 50%; background: #c9b78f; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  .name { font-size: 16px; font-weight: 600; }
+  .presence { font-size: 12px; color: #6b6b6b; }
+  .chat { padding: 10px 10px 18px; display: flex; flex-direction: column; gap: 6px; min-height: 640px;
+          background-image: radial-gradient(rgba(0,0,0,0.05) 1px, transparent 1.2px); background-size: 14px 14px; }
+  .day { align-self: center; background: #fff; color: #555; font-size: 12px; padding: 3px 10px; border-radius: 8px; margin: 4px 0 8px; box-shadow: 0 1px 0 rgba(0,0,0,0.08); }
+  .msg { max-width: 78%; padding: 6px 9px 7px; border-radius: 9px; font-size: 15px; line-height: 1.35; position: relative; box-shadow: 0 1px 0 rgba(0,0,0,0.12); }
+  .msg .time { float: right; margin: 6px 0 -4px 10px; font-size: 11px; color: #6b6b6b; }
+  .them { align-self: flex-start; background: #fff; border-top-left-radius: 2px; }
+  .me { align-self: flex-end; background: #d9fdd3; border-top-right-radius: 2px; }
+  .composer { display: flex; gap: 8px; padding: 8px 10px 14px; background: #f6f6f6; border-top: 1px solid #ddd; }
+  .input { flex: 1; background: #fff; border-radius: 18px; padding: 8px 14px; font-size: 14px; color: #8a8a8a; }
+</style>
+</head>
+<body>
+  <div class="status"><span>{{ status_time }}</span><span>5G ▮▮▮</span></div>
+  <div class="header">
+    <span class="back">‹</span>
+    <span class="avatar">{{ contact[0] }}</span>
+    <div><div class="name">{{ contact }}</div><div class="presence">{{ presence }}</div></div>
+  </div>
+  <div class="chat">
+    {% if show_day %}<span class="day">Today</span>{% endif %}
+    {% for message in messages %}
+    <div class="msg {{ message['from'] }}">{{ message.text }}<span class="time">{{ message.time }}</span></div>
+    {% endfor %}
+  </div>
+  <div class="composer"><span class="input">Message</span></div>
+</body>
+</html>

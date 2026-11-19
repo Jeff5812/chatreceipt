@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest==9.2.0
+# The labelled conversations for the intelligence evaluation (already installed by uvicorn[standard])
+PyYAML==6.0.3

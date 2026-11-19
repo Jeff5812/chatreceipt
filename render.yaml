@@ -1,0 +1,51 @@
+# Render Blueprint for the ChatReceipt API on Render's free plan. See docs/deployment.md.
+# Secrets are marked `sync: false`: Render asks for them when the Blueprint is created and never
+# reads them from this file.
+services:
+  - type: web
+    name: chatreceipt-api
+    runtime: docker
+    plan: free
+    # Closest Render region to the Supabase database (London) and to Nigeria.
+    region: frankfurt
+    # Only changes under backend/ trigger a build. Docker paths are relative to the repo root.
+    rootDir: backend
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: EXTRACTION_PROVIDER
+        value: gemini
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_FALLBACK_MODEL
+        value: gemini-3.5-flash
+      - key: GEMINI_LIGHT_MODEL
+        value: gemini-2.5-flash-lite
+      # The Vercel address of the website, for example https://chatreceipt.vercel.app
+      - key: FRONTEND_ORIGINS
+        sync: false
+      - key: PUBLIC_WEB_URL
+        sync: false
+      # Render's proxy appends to X-Forwarded-For; Cloudflare in front of it sets CF-Connecting-IP.
+      - key: TRUST_PROXY_HEADERS
+        value: "true"
+      - key: CLIENT_IP_HEADER
+        value: cf-connecting-ip
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_GRAPH_API_VERSION
+        value: v26.0
+      - key: WHATSAPP_TIMEZONE
+        value: Africa/Lagos

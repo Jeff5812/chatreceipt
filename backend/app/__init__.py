@@ -1,0 +1,1 @@
+"""ChatReceipt API."""

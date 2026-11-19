@@ -1,0 +1,1056 @@
+@import "tailwindcss";
+
+/*
+  ChatReceipt design tokens: a pixel terminal for receipts.
+  A near-black ground with a faint green cast, quiet panels drawn with 1px borders, warm off-white text and
+  one vivid lime, reserved for meaning: the main action, the agreed figure, what is active. Amber, red and
+  blue appear only as statuses. Documents (the record) stay on white paper: wrap them in .theme-paper,
+  which switches every colour token back to its light value inside.
+*/
+@theme {
+  /* Surfaces */
+  --color-paper: #0a0c0b;
+  --color-paper-deep: #0d100e;
+  --color-well: #070908;
+  --color-surface: #111513;
+  --color-raised: #171c19;
+  --color-sheet: #fbfcf8;
+
+  /* Text */
+  --color-ink: #e9eee9;
+  --color-ink-soft: #c3cbc5;
+  --color-muted: #8e9890;
+
+  /* Lines */
+  --color-line: #222a25;
+  --color-line-strong: #34403a;
+
+  /* Lime: the one bright colour. Text on a lime fill uses accent-ink. */
+  --color-accent: #c4f25a;
+  --color-accent-strong: #d5f78a;
+  --color-accent-soft: rgb(196 242 90 / 0.1);
+  --color-accent-ink: #0b0e08;
+  --color-accent-edge: #6e8f1f;
+  --color-accent-light: #b4e84a;
+  --color-accent-lighter: #cdf57a;
+
+  /* The deepest blacks: terminal title bars and the printer slot. Mist is quiet text on them. */
+  --color-noir: #050606;
+  --color-noir-raised: #0f1311;
+  --color-noir-soft: #1a201c;
+  --color-mist: #9aa49c;
+
+  /* Evidence highlight: only for marking where a value came from in the chat */
+  --color-marigold: #e2b23c;
+  --color-marigold-soft: #f6e3a9;
+  --color-marigold-light: #fbeec4;
+  --color-marigold-edge: #c99a2e;
+  --color-marigold-ink: #56400f;
+
+  /* Chat: wallpaper, the outgoing bubble and placeholder lines */
+  --color-chat-wall: #0d110f;
+  --color-bubble-out: #24331b;
+  --color-chat-line: #1f2622;
+
+  /* Type scale for interface text (no line-height, so each use keeps its own leading). */
+  --text-2xs: 0.625rem;
+  --text-label: 0.6875rem;
+  --text-caption: 0.75rem;
+  --text-meta: 0.8125rem;
+  --text-ui: 0.9375rem;
+
+  /* Validation */
+  --color-warn: #f2b84c;
+  --color-warn-soft: rgb(242 184 76 / 0.1);
+  --color-danger: #f28b7b;
+  --color-danger-soft: rgb(242 139 123 / 0.1);
+
+  /* Payment status (always shown with a shape and a label, never colour alone) */
+  --color-partial: #f2c25c;
+  --color-partial-soft: rgb(242 194 92 / 0.1);
+  --color-unpaid: #f4a27e;
+  --color-unpaid-soft: rgb(244 162 126 / 0.1);
+  --color-refunded: #a9bdd0;
+  --color-refunded-soft: rgb(169 189 208 / 0.1);
+
+  /*
+    Elevation, pixel style: no blur. A raised block sits on a hard base (2 to 8px) drawn in the deepest black
+    and outlined in the line colour, so it reads as a solid block even on the near-black page. Always paired
+    with a real border (Windows high-contrast mode removes shadows).
+  */
+  --shadow-e1: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 3px 0 0 #1a201c, 0 3px 0 1px var(--color-line), 0 26px 30px -20px rgb(0 0 0 / 0.95);
+  --shadow-e2: inset 0 1px 0 rgb(255 255 255 / 0.065), 0 4px 0 0 #1a201c, 0 4px 0 1px var(--color-line), 0 36px 44px -26px rgb(0 0 0 / 1);
+  --shadow-e3: inset 0 1px 0 rgb(255 255 255 / 0.07), 0 5px 0 0 #1d2420, 0 5px 0 1px var(--color-line-strong), 0 48px 60px -30px rgb(0 0 0 / 1);
+  --shadow-e4: 0 6px 0 0 #1d2420, 0 6px 0 1px var(--color-line-strong), 0 60px 80px -36px rgb(0 0 0 / 1);
+  --shadow-well: inset 0 3px 0 0 rgb(0 0 0 / 0.5);
+  --shadow-field: inset 0 2px 0 0 rgb(0 0 0 / 0.35);
+
+  /* Pixel traces: square corners everywhere. Notched corners come from .btn-px and the notch utilities. */
+  --radius-xs: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-3xl: 0px;
+  --radius-4xl: 0px;
+
+  --ease-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/*
+  Type that belongs with the pixels: Space Grotesk (a grotesk drawn from a monospace, so it shares the
+  terminal's DNA) for headings and text, Space Mono for figures and terminal output, and Tiny5, a true pixel
+  face, for labels and the wordmark.
+*/
+@theme inline {
+  --font-sans: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-pixel: "Tiny5", "Space Mono", ui-monospace, monospace;
+  --font-mono: "Space Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
+/*
+  Self-hosted faces (SIL Open Font License, see public/fonts). All three contain the naira sign, which lives
+  in the latin-ext files. Space Grotesk is one variable file for weights 300 to 700.
+*/
+@font-face {
+  font-family: "Space Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/space-mono-latin-ext-400.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Space Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/space-mono-latin-400.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Space Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/space-mono-latin-ext-700.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Space Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/space-mono-latin-700.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/*
+  Space Mono draws the naira sign small and closed, so at text sizes it reads as "#". Money must be
+  unmistakable, so for U+20A6 alone the mono family borrows IBM Plex Mono's full-height ₦ (also OFL).
+  These rules come after Space Mono's own, so they win for that one character.
+*/
+@font-face {
+  font-family: "Space Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/naira-plex-mono-400.woff2") format("woff2");
+  unicode-range: U+20A6;
+}
+
+@font-face {
+  font-family: "Space Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/naira-plex-mono-600.woff2") format("woff2");
+  unicode-range: U+20A6;
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("/fonts/space-grotesk-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("/fonts/space-grotesk-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Tiny5";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/tiny5-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Tiny5";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/tiny5-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@layer base {
+  html {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "kern" 1;
+  }
+
+  ::selection {
+    background: rgb(196 242 90 / 0.28);
+    color: var(--color-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  [tabindex="-1"]:focus {
+    outline: none;
+  }
+
+  /* Native form controls (date pickers, selects) follow the dark scheme. */
+  input,
+  select,
+  textarea {
+    color-scheme: dark;
+  }
+}
+
+@layer components {
+  /*
+    White paper: the record and anything printed. Every colour token flips back to its light value inside,
+    so the same components render correctly on paper.
+  */
+  .theme-paper {
+    color-scheme: light;
+    --color-paper: #f3f4f0;
+    --color-paper-deep: #eaece6;
+    --color-well: #eceee9;
+    --color-surface: #ffffff;
+    --color-raised: #f6f7f3;
+    --color-sheet: #ffffff;
+    --color-ink: #141614;
+    --color-ink-soft: #353b36;
+    --color-muted: #5d665f;
+    --color-line: #e1e5de;
+    --color-line-strong: #c8cec5;
+    --color-accent: #3f6f12;
+    --color-accent-strong: #2f5409;
+    --color-accent-soft: #edf5df;
+    --color-accent-ink: #ffffff;
+    --color-warn: #8a5a12;
+    --color-warn-soft: #fbf3e3;
+    --color-danger: #a1332b;
+    --color-danger-soft: #fbedea;
+    --color-partial: #7a5a12;
+    --color-partial-soft: #f7edd5;
+    --color-unpaid: #9a4a2e;
+    --color-unpaid-soft: #f6e6df;
+    --color-refunded: #4f5b66;
+    --color-refunded-soft: #e7ebee;
+    --shadow-e1: 0 1px 2px rgb(0 0 0 / 0.08);
+    --shadow-e2: 0 1px 2px rgb(0 0 0 / 0.1);
+    --shadow-well: inset 0 1px 2px rgb(0 0 0 / 0.06);
+    --shadow-field: inset 0 1px 1px rgb(0 0 0 / 0.05);
+    --label-font: var(--font-sans);
+    --label-size: 10px;
+    --label-weight: 600;
+    --label-track: 0.12em;
+    color: var(--color-ink);
+  }
+
+  .theme-paper input,
+  .theme-paper select,
+  .theme-paper textarea {
+    color-scheme: light;
+  }
+
+  /* A receipt's torn edges, drawn as pixel teeth above and below the paper. */
+  .receipt-edges::before,
+  .receipt-edges::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 6px;
+    background: linear-gradient(90deg, var(--color-sheet) 50%, transparent 0) 0 0 / 12px 6px repeat-x;
+  }
+
+  .receipt-edges::before {
+    top: -6px;
+  }
+
+  .receipt-edges::after {
+    bottom: -6px;
+  }
+}
+
+/*
+  Small uppercase labels: the pixel face at 16px, the size its grid is drawn for, whatever text size sits
+  beside it. On white paper (.theme-paper) labels switch back to a quiet sans so the record stays formal.
+*/
+@utility label-caps {
+  font-family: var(--label-font, var(--font-pixel)) !important;
+  font-size: var(--label-size, 16px) !important;
+  font-weight: var(--label-weight, 400);
+  line-height: 1;
+  letter-spacing: var(--label-track, 0.04em);
+  text-transform: uppercase;
+}
+
+/* Pixel labels: Tiny5 is drawn on a pixel grid, so it is kept at 16px (or 24/32px) to stay sharp. */
+@utility pixel-label {
+  font-family: var(--font-pixel);
+  font-size: 16px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Dot grids for wells and trays. */
+@utility bg-dots {
+  background-image: radial-gradient(circle at center, rgb(255 255 255 / 0.09) 1px, transparent 1.4px);
+  background-size: 18px 18px;
+}
+
+@utility bg-dots-ink {
+  background-image: radial-gradient(circle at center, rgb(255 255 255 / 0.06) 1px, transparent 1.4px);
+  background-size: 16px 16px;
+}
+
+/* A faint pixel grid behind technical panels. */
+@utility bg-pixel-grid {
+  background-image:
+    linear-gradient(rgb(255 255 255 / 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 0.028) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+@layer components {
+  /* Evidence highlight: a marker stroke behind the words a value came from. Always dark text on it. */
+  .mark {
+    color: #141311;
+    background-image: linear-gradient(transparent 8%, var(--color-marigold-soft) 8%, var(--color-marigold-soft) 92%, transparent 92%);
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+    border-radius: 2px;
+    padding-inline: 2px;
+    margin-inline: -2px;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+
+  /*
+    Pixel keys. A notched face with a bevel (light along the top, shade along the bottom) sits on a base that
+    is 1px wider on each side and 5px deeper, so every key reads as a small block you can press. Hover lifts
+    the face by a pixel (the base grows to match), and pressing sinks it to 2px. Face and base are
+    pseudo-elements, so the focus outline on the element itself is never clipped.
+    Variants set --px-fill, --px-hi, --px-lo, --px-edge and --px-rim.
+  */
+  .btn-px {
+    position: relative;
+    isolation: isolate;
+    margin-bottom: 5px;
+    --px-notch: polygon(
+      0 4px,
+      2px 4px,
+      2px 2px,
+      4px 2px,
+      4px 0,
+      calc(100% - 4px) 0,
+      calc(100% - 4px) 2px,
+      calc(100% - 2px) 2px,
+      calc(100% - 2px) 4px,
+      100% 4px,
+      100% calc(100% - 4px),
+      calc(100% - 2px) calc(100% - 4px),
+      calc(100% - 2px) calc(100% - 2px),
+      calc(100% - 4px) calc(100% - 2px),
+      calc(100% - 4px) 100%,
+      4px 100%,
+      4px calc(100% - 2px),
+      2px calc(100% - 2px),
+      2px calc(100% - 4px),
+      0 calc(100% - 4px)
+    );
+    transition: transform 0.1s steps(2, jump-none);
+  }
+
+  .btn-px::before,
+  .btn-px::after {
+    content: "";
+    position: absolute;
+    clip-path: var(--px-notch);
+    pointer-events: none;
+  }
+
+  /* The face. */
+  .btn-px::before {
+    inset: 0;
+    z-index: -1;
+    background: var(--px-fill);
+    box-shadow:
+      inset 0 0 0 1px var(--px-rim, transparent),
+      inset 0 2px 0 var(--px-hi, transparent),
+      inset 0 -3px 0 var(--px-lo, transparent);
+    transition: background-color 0.12s;
+  }
+
+  /* The base. */
+  .btn-px::after {
+    inset: 2px -1px -5px;
+    z-index: -2;
+    background: var(--px-edge);
+    transition: bottom 0.1s steps(2, jump-none);
+  }
+
+  .btn-px:hover,
+  .press:hover .btn-px {
+    transform: translateY(-1px);
+  }
+
+  .btn-px:hover::after,
+  .press:hover .btn-px::after {
+    bottom: -6px;
+  }
+
+  .btn-px:active,
+  .press:active .btn-px {
+    transform: translateY(3px);
+  }
+
+  .btn-px:active::after,
+  .press:active .btn-px::after {
+    bottom: -2px;
+  }
+
+  /* Lime: the one key that moves you forward. */
+  .key-lime {
+    --px-fill: var(--color-accent);
+    --px-hi: rgb(255 255 255 / 0.45);
+    --px-lo: rgb(40 60 0 / 0.22);
+    --px-edge: #34480c;
+    color: var(--color-accent-ink);
+  }
+
+  .key-lime:hover,
+  .press:hover .key-lime {
+    --px-fill: var(--color-accent-strong);
+  }
+
+  /* Graphite: everything else. */
+  .key-dark {
+    --px-fill: #1b221e;
+    --px-hi: rgb(255 255 255 / 0.08);
+    --px-lo: rgb(0 0 0 / 0.35);
+    --px-rim: rgb(255 255 255 / 0.07);
+    --px-edge: #000;
+    color: var(--color-ink);
+  }
+
+  .key-dark:hover {
+    --px-fill: #222b26;
+    --px-rim: rgb(196 242 90 / 0.45);
+  }
+
+  /* A key you can't press yet sits flat and dim, whatever its colour. */
+  .btn-px:disabled,
+  .btn-px[aria-disabled="true"] {
+    --px-fill: #161b18;
+    --px-hi: transparent;
+    --px-lo: transparent;
+    --px-rim: rgb(255 255 255 / 0.06);
+    --px-edge: #0c0f0d;
+    color: #6f7871;
+    transform: translateY(3px);
+  }
+
+  .btn-px:disabled::after,
+  .btn-px[aria-disabled="true"]::after {
+    bottom: -2px;
+  }
+}
+
+@layer components {
+  /* The terminal demo: lines wait, hidden, until the script types them out (see terminal-demo.tsx). */
+  .term-armed [data-line] {
+    opacity: 0;
+  }
+
+  .term-armed [data-cell] {
+    background-color: var(--color-line-strong);
+  }
+
+  /* The record printer: the paper waits inside the slot until the script feeds it out (see printer.tsx). */
+  .print-armed [data-paper] {
+    transform: translateY(-62%);
+  }
+
+  /*
+    Floating pixel objects: each bobs on its own clock (--dur, --delay) at a slight angle (--rot), and drifts
+    with the pointer by --k pixels at full deflection (--mx, --my run from -1 to 1).
+  */
+  .float-drift {
+    translate: calc(var(--mx, 0) * var(--k, 0) * 1px) calc(var(--my, 0) * var(--k, 0) * 1px);
+    transition: translate 0.9s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .float-bob {
+    transform: rotate(var(--rot, 0deg));
+    animation: cr-bob var(--dur, 6s) ease-in-out var(--delay, 0s) infinite;
+    filter: drop-shadow(0 18px 18px rgb(0 0 0 / 0.45));
+  }
+
+  .float-shadow {
+    opacity: 0.55;
+    animation: cr-floor var(--dur, 6s) ease-in-out var(--delay, 0s) infinite;
+  }
+}
+
+@keyframes cr-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(var(--rot, 0deg));
+  }
+  50% {
+    transform: translateY(-12px) rotate(calc(var(--rot, 0deg) + 3deg));
+  }
+}
+
+@keyframes cr-floor {
+  0%,
+  100% {
+    transform: scaleX(1);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scaleX(0.78);
+    opacity: 0.3;
+  }
+}
+
+/* Notched corners for small tags and chips (no pressable edge). */
+@utility notch-4 {
+  clip-path: polygon(0 4px, 4px 4px, 4px 0, calc(100% - 4px) 0, calc(100% - 4px) 4px, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 4px calc(100% - 4px), 0 calc(100% - 4px));
+}
+
+@utility notch-2 {
+  clip-path: polygon(0 2px, 2px 2px, 2px 0, calc(100% - 2px) 0, calc(100% - 2px) 2px, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 2px calc(100% - 2px), 0 calc(100% - 2px));
+}
+
+/* Terminal caret and typing dots. */
+@keyframes cr-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.anim-blink {
+  animation: cr-blink 1.1s steps(1) infinite;
+}
+
+@keyframes cr-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+.anim-dot {
+  animation: cr-dot 1.2s steps(2, jump-none) infinite;
+}
+
+/* Small entrances. */
+@keyframes cr-pop {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.anim-pop {
+  animation: cr-pop 0.45s var(--ease-soft) both;
+}
+
+@keyframes cr-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.anim-rise {
+  animation: cr-rise 0.7s var(--ease-soft) both;
+}
+
+/* While screenshots are being read: a slow scan line. */
+@keyframes cr-scan {
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  10%,
+  85% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(520%);
+    opacity: 0;
+  }
+}
+
+.anim-scan {
+  animation: cr-scan 1.5s cubic-bezier(0.45, 0, 0.55, 1) both;
+}
+
+.anim-scan-loop {
+  animation: cr-scan 2.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+@keyframes indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+.progress-indeterminate {
+  animation: indeterminate 1.6s steps(12, jump-none) infinite;
+}
+
+/* Scroll reveal: only armed by RevealOnScroll, so content is visible without JavaScript. Blocks rise and
+   tip forward into place, as if lifted onto the page. It uses the individual translate and rotate
+   properties so it never fights the tilt, which uses transform. */
+.reveal-armed [data-reveal] {
+  opacity: 0;
+  translate: 0 22px;
+  rotate: x 12deg;
+  transform-origin: 50% 100%;
+  transition:
+    opacity 0.7s var(--ease-soft),
+    translate 0.7s var(--ease-soft),
+    rotate 0.7s var(--ease-soft),
+    transform 0.35s var(--ease-soft),
+    box-shadow 0.35s var(--ease-soft);
+  transition-delay: var(--reveal-delay, 0ms), var(--reveal-delay, 0ms), var(--reveal-delay, 0ms), 0ms, 0ms;
+}
+
+.reveal-armed [data-reveal].is-revealed {
+  opacity: 1;
+  translate: none;
+  rotate: none;
+}
+
+@layer components {
+  /* FAQ disclosure: a pixel triangle that turns when the answer opens. */
+  .faq summary {
+    list-style: none;
+  }
+
+  .faq summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .faq[open] .faq-caret {
+    transform: rotate(90deg);
+  }
+}
+
+/* ---------- The floating environment ---------- */
+
+/*
+  Light, not shadow, gives depth on a near-black page: each section is lit faintly from above, so the soft
+  floor shadows under raised blocks have something to fall on.
+*/
+@utility lit {
+  background-image: radial-gradient(70% 55% at 50% 0%, rgb(220 255 170 / 0.035), transparent 70%);
+}
+
+/* A pixel grid floor in perspective: the stage the hero and the closing section stand on. */
+.floor {
+  position: absolute;
+  inset-inline: -25%;
+  bottom: 0;
+  height: 340px;
+  pointer-events: none;
+  /* The tilted plane's near edge projects far below the box; clip it so it can't lengthen the page. */
+  overflow: hidden;
+  perspective: 520px;
+  perspective-origin: 50% 0%;
+  mask-image: linear-gradient(to top, black 20%, transparent 95%);
+}
+
+.floor::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 -60%;
+  transform-origin: 50% 0%;
+  transform: rotateX(62deg);
+  background-image:
+    linear-gradient(rgb(196 242 90 / 0.11) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(196 242 90 / 0.11) 1px, transparent 1px);
+  background-size: 46px 46px;
+  animation: cr-floor-drift 9s linear infinite;
+}
+
+/* The horizon line where the floor meets the dark. */
+.floor::after {
+  content: "";
+  position: absolute;
+  inset-inline: 10%;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(196 242 90 / 0.3), transparent);
+  box-shadow: 0 0 24px 6px rgb(196 242 90 / 0.06);
+}
+
+@keyframes cr-floor-drift {
+  to {
+    background-position: 0 46px;
+  }
+}
+
+/*
+  Tilt: blocks marked data-tilt lean a few degrees towards the pointer and lift (see tilt.tsx, which sets
+  --rx and --ry). Mouse and pen only; never on touch or with reduced motion.
+*/
+[data-tilt] {
+  transform: perspective(1000px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) translateY(var(--lift, 0px));
+  transition:
+    transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: transform;
+}
+
+[data-tilt].is-tilting {
+  --lift: -6px;
+  transition-duration: 0.12s, 0.35s;
+}
+
+/* Showcase objects (the terminal, the printer) hover in place, rising and settling slowly. */
+.hover-idle {
+  animation: cr-hover 8s ease-in-out infinite;
+}
+
+@keyframes cr-hover {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+/* The soft shadow a hovering object casts on the floor: tightest when the object is lowest. */
+.hover-shadow {
+  animation: cr-hover-shadow 8s ease-in-out infinite;
+}
+
+@keyframes cr-hover-shadow {
+  0%,
+  100% {
+    transform: scaleX(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scaleX(0.86);
+    opacity: 0.55;
+  }
+}
+
+/* ---------- Pixel rewards: checkmarks, confetti, spinners ---------- */
+
+/* A pixel checkmark that draws itself cell by cell (each cell sets --i), then pops. */
+.pxc .pxc-cell {
+  opacity: 0;
+  animation: cr-cell 0.01s steps(1) forwards;
+  animation-delay: calc(var(--i) * 45ms);
+}
+
+.pxc .pxc-pop {
+  animation: cr-check-pop 0.32s steps(4) both;
+  animation-delay: var(--done, 400ms);
+}
+
+.pxc .pxc-spark {
+  opacity: 0;
+  animation: cr-spark 0.5s steps(5) forwards;
+  animation-delay: var(--done, 400ms);
+}
+
+@keyframes cr-cell {
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes cr-check-pop {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes cr-spark {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--sx), var(--sy));
+  }
+}
+
+/* Pixel confetti: a short burst of squares that fall and fade. */
+.confetti > i {
+  position: absolute;
+  top: 40%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  opacity: 0;
+  animation: cr-confetti 1.3s steps(12) forwards;
+  animation-delay: var(--d, 0ms);
+}
+
+@keyframes cr-confetti {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) rotate(0deg);
+  }
+  35% {
+    opacity: 1;
+    transform: translate(calc(var(--x) * 0.7), calc(var(--y) * 1)) rotate(90deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--x), calc(var(--y) + 90px)) rotate(180deg);
+  }
+}
+
+/* A retro spinner: eight squares round a ring, one lit at a time. */
+.px-spinner > i {
+  position: absolute;
+  width: 25%;
+  height: 25%;
+  background: currentColor;
+  opacity: 0.2;
+  animation: cr-spin-cell 0.8s steps(1) infinite;
+  animation-delay: calc(var(--n) * 100ms - 800ms);
+}
+
+@keyframes cr-spin-cell {
+  0%,
+  12% {
+    opacity: 1;
+  }
+  13%,
+  100% {
+    opacity: 0.2;
+  }
+}
+
+/* Characters hop with a squash on landing. */
+@keyframes cr-hop {
+  0%,
+  100% {
+    transform: translateY(0) scaleY(1);
+  }
+  30% {
+    transform: translateY(-22px) scaleY(1.05);
+  }
+  55% {
+    transform: translateY(0) scaleY(0.88);
+  }
+  70% {
+    transform: translateY(-6px) scaleY(1.02);
+  }
+}
+
+.anim-hop {
+  transform-origin: 50% 100%;
+  animation: cr-hop 0.9s cubic-bezier(0.3, 0.7, 0.4, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+
+/* The mini game's ground scrolls under Chit while the screenshots are read. */
+.ground {
+  background-image: linear-gradient(90deg, var(--color-line-strong) 50%, transparent 50%);
+  background-size: 16px 2px;
+  background-repeat: repeat-x;
+  animation: cr-ground 0.6s steps(4) infinite;
+}
+
+@keyframes cr-ground {
+  to {
+    background-position: -16px 0;
+  }
+}
+
+/* A segmented bar with a band of lit cells sweeping along it, for waits with no known length. */
+.seg-sweep > span {
+  animation: cr-seg 1.6s steps(1) infinite;
+  animation-delay: calc(var(--i) * 66ms - 1.6s);
+}
+
+@keyframes cr-seg {
+  0%,
+  20% {
+    background-color: var(--color-accent);
+  }
+  21%,
+  100% {
+    background-color: var(--color-line);
+  }
+}
+
+/* The printing loader: paper feeds out of the slot in steps, then starts again. */
+.print-feed {
+  animation: cr-print 2.6s steps(13) infinite;
+}
+
+@keyframes cr-print {
+  0% {
+    transform: translateY(-100%);
+  }
+  70%,
+  100% {
+    transform: translateY(0);
+  }
+}
+
+/* A faint CRT scanline over retro screens. */
+@utility scanlines {
+  background-image: repeating-linear-gradient(to bottom, rgb(255 255 255 / 0.025) 0 1px, transparent 1px 3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .floor::before,
+  .hover-idle,
+  .hover-shadow,
+  .ground,
+  .px-spinner > i,
+  .anim-hop,
+  .print-feed {
+    animation: none;
+  }
+
+  .seg-sweep > span {
+    animation: none;
+    background-color: var(--color-accent);
+    opacity: 0.5;
+  }
+
+  [data-tilt] {
+    transform: none;
+  }
+
+  .pxc .pxc-cell,
+  .pxc .pxc-pop {
+    animation: none;
+    opacity: 1;
+  }
+
+  .pxc .pxc-spark,
+  .confetti {
+    display: none;
+  }
+
+  .anim-blink,
+  .anim-dot,
+  .anim-pop,
+  .anim-rise,
+  .float-bob,
+  .float-shadow {
+    animation: none;
+  }
+
+  .float-drift {
+    translate: none;
+  }
+
+  .anim-scan,
+  .anim-scan-loop {
+    display: none;
+  }
+
+  .progress-indeterminate {
+    animation: none;
+    transform: none;
+    width: 100%;
+    opacity: 0.4;
+  }
+
+  .btn-px,
+  .btn-px::before,
+  .btn-px::after {
+    transition: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "nano-banana": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "nano-banana-mcp@1.0.3"],
+      "env": {
+        "GEMINI_API_KEY": "${GEMINI_API_KEY}"
+      }
+    },
+    "whatsapp-business-tools": {
+      "type": "http",
+      "url": "https://mcp.facebook.com/whatsapp_business_tools"
+    }
+  }
+}
