@@ -146,7 +146,34 @@ The API must be reachable over HTTPS with a valid certificate. In the Meta app, 
 
 Set `NEXT_PUBLIC_WHATSAPP_NUMBER` in the frontend's environment to the business number, digits only with the country code, and rebuild. Until it is set, the site shows no WhatsApp buttons.
 
-### 6. Test with a real phone
+### 6. Profile, welcome message and commands
+
+What people see before they type lives in `backend/app/whatsapp/profile.py`:
+
+- **Profile picture:** Chit and the wordmark on the dark ground, `docs/brand/whatsapp-profile.png`. Draw it
+  again with `python docs/brand/render_profile.py`.
+- **About line, description and category.**
+- **Welcome message:** Meta tells the bot when someone opens the chat for the first time, and the bot
+  answers with its welcome.
+- **First-chat suggestions:** "Turn a chat into a receipt", "How does ChatReceipt work?", "Show my recent
+  records" and "Open my records on the web".
+- **The "/" menu:** `help`, `new`, `show`, `retry`, `recent`, `web` and `cancel`.
+
+Apply it, and check what's set, with:
+
+```bash
+cd backend
+python -m scripts.whatsapp_profile apply --picture ../docs/brand/whatsapp-profile.png
+python -m scripts.whatsapp_profile show
+```
+
+Add `--website https://<your-site>` once the website is hosted. A test checks that every suggestion and
+command reaches a command the bot understands.
+
+The display name is set separately. Meta approves a new name, and it shows once the number is registered
+again: in WhatsApp Manager, or through the API with the number's two-step verification PIN.
+
+### 7. Test with a real phone
 
 Send "hi" to the number, then a screenshot, then confirm. Meta's test number can only message phone numbers you add in the API setup page. To serve the public you need a verified business and an approved display name.
 

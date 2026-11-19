@@ -44,6 +44,8 @@ A phase counts as complete only when it works and its tests pass.
   - `backend/Dockerfile`, `render.yaml` and [docs/deployment.md](docs/deployment.md) cover free hosting on Vercel and Render.
   - `.env.example` now lists the engine settings.
   - `scripts/api_session.py` creates API accounts and sessions.
+- **WhatsApp profile:** picture, about line, description, category, welcome message, first-chat suggestions and the "/" command menu, from `app/whatsapp/profile.py` via `scripts/whatsapp_profile.py`.
+- **Public repository:** <https://github.com/Jeff5812/chatreceipt>. Before publishing, the real names from the first phone test were replaced with fictional ones in the tests and evaluations.
 - **Website wording:**
   - slogans and repeated disclaimers removed across the landing page and app
   - the "/ chat → record" tagline removed from the header
@@ -67,7 +69,7 @@ A phase counts as complete only when it works and its tests pass.
 - **Different models:** the evaluation measured `gemini-3.5-flash-lite`, not `gemini-2.5-flash`, which the live channels use.
 - **Temporary storage on the free host:** the engine keeps files in local storage, so on Render's free plan uploads and receipts under `/api/v1` don't survive a restart.
 - **Docker build unverified:** the image hasn't been built locally, because Docker Desktop wasn't running.
-- **Display name:** the WhatsApp number's display name hasn't been changed to ChatReceipt yet.
+- **Display name:** Meta has approved "ChatReceipt", but it only shows after the number is registered again, which needs WhatsApp Manager or the number's two-step verification PIN.
 
 ## Deferred
 
