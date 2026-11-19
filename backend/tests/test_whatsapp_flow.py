@@ -1187,3 +1187,35 @@ def test_a_common_correction_needs_no_ai(setup: Any) -> None:
     assert provider.requests == []
     body = channel.graph.last_body()
     assert "Paid so far: ₦15,000.00" in body and "🟡 Partially paid" in body
+
+
+# -- greetings while a draft is open ----------------------------------------------------------------
+
+
+def test_hi_with_a_draft_waiting_welcomes_back_instead_of_resuming_it(setup: Any) -> None:
+    channel, provider = setup()
+    draft_ready(channel)
+    calls = len(provider.calls)
+    channel.say(ALICE, "hi")
+    assert channel.graph.last_body().startswith("Hi again 👋 Your draft from earlier isn't saved yet")
+    assert channel.graph.offered() == {"Continue the draft", "Start a new one", "Get help"}
+    assert len(provider.calls) == calls  # "hi" wasn't read as a correction
+
+    channel.tap(ALICE, "Continue the draft")
+    assert "Confirm" in channel.graph.offered()
+
+    channel.say(ALICE, "hello")
+    channel.tap(ALICE, "Start a new one")
+    assert "cleared that draft" in channel.graph.last_body()
+    assert channel.rows("SELECT 1 FROM chatreceipt.whatsapp_submissions WHERE status = 'awaiting_confirmation'") == []
+
+
+def test_hi_is_never_taken_as_the_answer_to_a_question(setup: Any) -> None:
+    channel, _ = setup()
+    draft_ready(channel)
+    channel.tap(ALICE, "Correct")
+    channel.tap(ALICE, "Seller")
+    channel.say(ALICE, "hi")
+    assert channel.graph.last_body().startswith("Hi again")
+    [row] = channel.rows("SELECT draft FROM chatreceipt.whatsapp_submissions WHERE status = 'awaiting_confirmation'")
+    assert row["draft"]["seller"] != "hi"

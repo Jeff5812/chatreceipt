@@ -59,6 +59,8 @@ ASK_FOR_IMAGE = "Send me a screenshot of the chat or payment. If it runs across 
 ACKNOWLEDGE = "📥 Got it. I'm reading your screenshot now."
 READING_AGAIN = "🔄 Reading your screenshot again now."
 STILL_READING = "I'm still reading your screenshot. I'll send the details here as soon as they're ready."
+WELCOME_BACK = "Hi again 👋 Your draft from earlier isn't saved yet. Do you want to continue it, or start a new one?"
+WELCOME_BACK_READING = "Hi again 👋 " + STILL_READING
 HELP = (
     "*How ChatReceipt works*\n"
     "1. Send a screenshot of a chat or a payment.\n"
@@ -126,7 +128,7 @@ _COMMANDS: dict[str, frozenset[str]] = {
     "erase": frozenset({"delete my data", "delete my account", "erase my data"}),
 }
 # Commands that still work while ChatReceipt is waiting for a typed value.
-_ESCAPES = frozenset({"confirm", "retry", "show", "restart", "help", "erase", "recent", "web"})
+_ESCAPES = frozenset({"confirm", "retry", "show", "restart", "help", "erase", "recent", "web", "greeting"})
 _BACK = frozenset({"back", "keep", "cancel"})
 _NO_DATE = frozenset({"skip", "no date", "none", "no", "nope", "not sure", "dont know", "don t know", "i don t know"})
 _MONTH_ABBR = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
@@ -195,6 +197,22 @@ class Turn:
 
     def menu(self) -> None:
         self.send(button_message("What would you like to do?", self._main_buttons()))
+
+    def welcome_back(self, submission: Row) -> None:
+        """A greeting while a draft is open: say hello and let them pick up the draft or start over."""
+        if submission["status"] != "awaiting_confirmation":
+            self.say(WELCOME_BACK_READING)
+            return
+        self.send(
+            button_message(
+                WELCOME_BACK,
+                [
+                    (reply_id("menu", arg="draft"), "Continue the draft"),
+                    (reply_id("menu", arg="restart"), "Start a new one"),
+                    (reply_id("menu", arg="help"), "Get help"),
+                ],
+            )
+        )
 
     def recent(self) -> None:
         rows = store.recent_transactions(self.conn, self.customer["id"], limit=5)
@@ -539,7 +557,9 @@ class Turn:
                 self.confirm(submission, without_date=True)
                 return
 
-        if command == "help":
+        if command == "greeting" and submission is not None:
+            self.welcome_back(submission)
+        elif command == "help":
             self.send(button_message(HELP, self._main_buttons()[:2]))
         elif command == "recent":
             self.recent()
@@ -664,6 +684,16 @@ class Turn:
             self.web_link()
         elif choice == "help":
             self.send(button_message(HELP, self._main_buttons()[:2]))
+        elif choice in ("draft", "restart"):
+            submission = store.open_submission(self.conn, self.customer["id"])
+            if submission is None:
+                self.say(NOTHING_OPEN)
+            elif choice == "restart":
+                self.start_again(submission)
+            elif submission["status"] != "awaiting_confirmation":
+                self.say(STILL_READING)
+            else:
+                self.show_draft(submission)
         else:
             self.menu()
 
