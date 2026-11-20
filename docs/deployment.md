@@ -2,10 +2,12 @@
 
 ChatReceipt runs on free plans only. Nothing here needs a domain, a card or a paid service.
 
+**Live since 2026-11-20.** Everything below is set up; the steps stay here for rebuilding it.
+
 | Part | Where | Address |
 | --- | --- | --- |
-| Website (Next.js) | Vercel, Hobby plan | `https://<project>.vercel.app` |
-| API, WhatsApp channel and PDF printing (FastAPI) | Render, free web service (Docker) | `https://chatreceipt-api.onrender.com` |
+| Website (Next.js) | Vercel, Hobby plan, project `chatreceipt` | <https://chatreceipt.vercel.app> |
+| API, WhatsApp channel and PDF printing (FastAPI) | Render, free web service (Docker), `chatreceipt-api` | <https://chatreceipt-api.onrender.com> |
 | Database | Supabase, free project (already set up) | — |
 | Reading screenshots | Google Gemini API, free tier (already set up) | — |
 
@@ -19,7 +21,9 @@ ordinary always-on process while it is awake.
   WhatsApp message after a quiet spell is slow. Meta retries webhook deliveries that fail, so a message
   sent while the API is waking arrives late rather than being lost. Background work (WhatsApp replies,
   receipts) pauses while it sleeps and resumes when the next request wakes it. Render's 750 free instance
-  hours a month cover one service running all month.
+  hours a month cover one service running all month. Nothing keeps the API awake: a ping every 10
+  minutes would, but the hours are shared by every free service in the Render workspace, and running out
+  suspends all of them until the next month.
 - **Render gives 512 MB of memory and a tenth of a CPU.** Tested locally with the same limits
   (2026-11-19): the API uses about 115 MB at rest and 245 MB after printing. A PDF or PNG takes 10–20
   seconds, and the first one after the API starts about 45 seconds while Chromium starts, which is why
@@ -86,6 +90,13 @@ curl -X POST "https://graph.facebook.com/v26.0/$WHATSAPP_PHONE_NUMBER_ID" \
 
 Meta calls the API to check the verify token, so the API must be awake (open `/api/health` first).
 
+Done on 2026-11-20: the number's override points at `https://chatreceipt-api.onrender.com/api/whatsapp/webhook`.
+The app-level callback belongs to another number on the same Meta app, so never change it.
+
+The WhatsApp worker runs inside the API (`WHATSAPP_WORKER_IN_PROCESS`), and only one copy may run against
+the database. `backend/.env` on the development computer points at the same database, so it turns the
+local workers off; turn Render's off before running one anywhere else.
+
 ## 4. Check it
 
 - The website loads at the Vercel address and **Create a receipt** opens.
@@ -95,18 +106,33 @@ Meta calls the API to check the verify token, so the API must be awake (open `/a
 
 ## Updating and rolling back
 
-- Push to the main branch: Vercel rebuilds the website and Render rebuilds the API (only when something
-  under `backend/` changed).
+- **Website:** push to the main branch and Vercel rebuilds it, skipping the build when nothing under
+  `frontend/` changed.
+- **API:** Render isn't connected to GitHub through Render's GitHub app, so a push doesn't deploy it.
+  Push, then run `python -m scripts.render_deploy` from `backend/` (it uses `RENDER_API_KEY` from
+  `backend/.env` and waits until the new version is live), or use **Manual Deploy** in the Render
+  dashboard. To deploy on every push instead, connect the repository in the service's settings.
+- Apply new migrations before deploying the code that needs them (see step 1).
 - To undo a bad release, use **Instant Rollback** on the previous deployment in Vercel, and **Rollback**
   on the previous deploy in Render. Database migrations aren't undone by a rollback, so keep them
   backward-compatible.
 
 ## What has been checked
 
-The Docker image builds (2 GB, most of it Chromium) and was run on 2026-11-19 with Render's free limits
+In production on 2026-11-20:
+
+- The website's pages load publicly, its WhatsApp buttons use the business number, and the API accepts
+  requests from the website's address and refuses other origins.
+- Readiness reports the database, all four migrations and the worker as fine.
+- A webhook signed with the app secret is accepted, and a forged one is refused.
+- A PDF took 10 seconds and a PNG 3 seconds; a real screenshot was read in 7.5 seconds, with the
+  negotiated price and the delivery fee added up by the backend.
+
+Not yet checked since the move: a message from a real phone through the hosted channel.
+
+Before that, the Docker image was run on 2026-11-19 with Render's free limits
 (`docker run --memory 512m --cpus 0.1`): health, settings, a calculation, and a real PDF and PNG all
-worked, without running out of memory. Render builds the image on its own servers, so its first build is
-still the first real one; if it fails, the build log names the step.
+worked, without running out of memory.
 
 To run the same image yourself:
 

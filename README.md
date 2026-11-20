@@ -69,9 +69,9 @@ python -m evals.run_intelligence --split dev --model gemini-3.5-flash-lite   # t
 
 ## Deploying
 
-The website runs on Vercel's free plan and the API on Render's free plan, with Supabase and Gemini's
-free tiers; no domain or card is needed. Steps and the limits of free hosting are in
-[docs/deployment.md](docs/deployment.md).
+The website runs on Vercel's free plan at <https://chatreceipt.vercel.app> and the API on Render's free
+plan at <https://chatreceipt-api.onrender.com>, with Supabase and Gemini's free tiers; no domain or card
+is needed. Steps and the limits of free hosting are in [docs/deployment.md](docs/deployment.md).
 
 ## WhatsApp
 

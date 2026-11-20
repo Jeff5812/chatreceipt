@@ -2,7 +2,7 @@
 
 Customers can send a chat or receipt screenshot to ChatReceipt's WhatsApp number, check what was read, correct it, and save a record they can later open on the website.
 
-**Status: tested end to end with a real phone on 2026-11-18 and 2026-11-19, through a temporary tunnel to a computer. It isn't hosted anywhere permanent yet, so it only answers while that computer and tunnel are running.**
+**Status: hosted since 2026-11-20. Meta delivers the number's messages to the API on Render's free plan (`https://chatreceipt-api.onrender.com/api/whatsapp/webhook`), whose worker reads and answers them. Tested end to end with a real phone on 2026-11-18 and 2026-11-19, through a tunnel to a computer. On the free plan the API sleeps after 15 minutes without traffic, so the first reply after a quiet spell takes about a minute ([deployment.md](deployment.md)).**
 
 ## How it works
 
@@ -227,7 +227,7 @@ python -m pytest tests/test_whatsapp_flow.py tests/test_whatsapp_units.py
 
 ## Known limitations
 
-- Only reachable while the computer running the backend and the tunnel is on; it needs permanent hosting.
+- On Render's free plan the API sleeps after 15 minutes without traffic and takes up to a minute to wake, so the first reply after a quiet spell is slow. Meta delivers the message again if the API doesn't answer in time; it is handled once.
 - Gemini's free tier limits it to about 20 screenshots a day (see Cost).
 - A correction the AI misreads is shown to the customer before anything is saved, but isn't flagged as uncertain.
 - Saved records can't be edited after confirmation. The customer can delete all their data, but not one record.

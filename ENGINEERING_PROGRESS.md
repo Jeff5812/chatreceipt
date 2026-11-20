@@ -19,7 +19,27 @@ A phase counts as complete only when it works and its tests pass.
 | 10 | API security and authorisation | Complete | Bearer sessions, tenant isolation in the database, upload and injection defences; operator session tool and proxy-safe rate limits added 2026-11-19 |
 | 11 | Testing and AI evaluation | Complete | 119 labelled conversations, fixed split, runner, scoring and reports; development and held-out runs on 2026-11-19 ([TESTING.md](TESTING.md)) |
 | 12 | Observability and performance | Complete, no load test | Structured events, request IDs, health and readiness, private metrics. No load testing was done |
-| 13 | Deployment and documentation | In progress | Documents and free deployment files are done; the deployment itself, the demonstration script and seed data are not |
+| 13 | Deployment and documentation | Deployed, two items open | Live since 2026-11-20 on free plans ([docs/deployment.md](docs/deployment.md)). The demonstration script and seed data are still to do |
+
+## Done on 2026-11-20
+
+- **Deployed on free plans:**
+  - website: <https://chatreceipt.vercel.app> (Vercel Hobby). Builds when `frontend/` changes; preview builds need a Vercel login
+  - API: <https://chatreceipt-api.onrender.com> (Render free, Frankfurt), now running the WhatsApp worker, which had been off while a computer ran it through a tunnel
+  - WhatsApp: the number's webhook moved from the tunnel to Render, and the profile lists the website
+  - migration 0004 applied
+- **Checked in production:**
+  - readiness: database, migrations and worker
+  - Meta's signature check
+  - a PDF in 10 s and a PNG in 3 s
+  - a real screenshot read in 7.5 s, with the negotiated price and delivery added up by the backend
+- **WhatsApp questions about saved records** (`app/whatsapp/assistant.py`): "who still owes me?", totals for a period, records by person or reference, a receipt sent again.
+  - every figure comes from the database
+  - the AI's names, references and wording are used only after checks
+  - 23 new tests (18 unit, 5 end to end)
+  - `evals.whatsapp_corrections` gained 5 request cases and `--only`; 11 of 11 chosen cases passed on `gemini-2.5-flash-lite`
+- **Safety for local runs:** `backend/.env` points at the production database, so it now turns off both in-process workers on this computer.
+- **`scripts/render_deploy.py`:** deploys the API, because Render isn't connected to GitHub through its app and a push doesn't deploy it.
 
 ## Done on 2026-11-19
 
@@ -68,7 +88,8 @@ A phase counts as complete only when it works and its tests pass.
 - **Pipeline split:** the website and WhatsApp still use the single-step extraction; only `/api/v1` uses the engine pipeline.
 - **Different models:** the evaluation measured `gemini-3.5-flash-lite`, not `gemini-2.5-flash`, which the live channels use.
 - **Temporary storage on the free host:** the engine keeps files in local storage, so on Render's free plan uploads and receipts under `/api/v1` don't survive a restart.
-- **Render build not yet run:** the Docker image builds and works locally under Render's free limits (512 MB, a tenth of a CPU), but Render's own first build is still to come. A PDF there takes 10–20 seconds, and the first one about 45.
+- **Free-plan sleep:** Render stops the API after 15 minutes without traffic, so the first upload or WhatsApp reply after a quiet spell waits about a minute while it wakes. No keep-alive is set up.
+- **No deploy on push for the API:** Render isn't connected through its GitHub app. Run `python -m scripts.render_deploy` after pushing, or connect the repository in the service's settings.
 - **Business number stays visible:** WhatsApp always shows a business's number. The display name is "ChatReceipt" since 2026-11-19, applied by registering the number again.
 
 ## Deferred
@@ -80,10 +101,7 @@ A phase counts as complete only when it works and its tests pass.
 
 ## Next
 
-1. **Deploy:**
-   - a private GitHub repository
-   - the API on Render and the website on Vercel ([docs/deployment.md](docs/deployment.md))
-   - point the WhatsApp number at the Render URL
+1. **Send "hi" and a screenshot from a real phone** to the hosted WhatsApp channel; it has only been checked with signed test requests since the move to Render.
 2. **Next round of rules, developed on the development split:**
    - payment terms ("pay on delivery") as a sign of "unpaid"
    - decreasing timestamps as out-of-order messages

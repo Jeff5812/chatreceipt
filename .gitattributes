@@ -1,0 +1,3 @@
+# Applied migrations are checksummed (app/db/migrate.py), so their bytes must not change with the
+# checkout: keep them LF on every machine, including Windows with core.autocrlf.
+backend/app/db/migrations/*.sql text eol=lf
