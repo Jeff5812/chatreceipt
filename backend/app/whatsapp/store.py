@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from collections.abc import Iterable, Sequence
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -168,6 +168,8 @@ def claim_inbound(conn: Connection) -> Row | None:
               SELECT 1 FROM chatreceipt.whatsapp_submissions s
               WHERE s.customer_id = i.customer_id AND s.status = 'awaiting_confirmation' AND s.instruction IS NOT NULL
           )
+          -- So is a free-text request.
+          AND NOT EXISTS (SELECT 1 FROM chatreceipt.customers c WHERE c.id = i.customer_id AND c.request IS NOT NULL)
         ORDER BY i.next_attempt_at, i.seq
         LIMIT 1
         FOR UPDATE OF i SKIP LOCKED
@@ -647,7 +649,151 @@ def purge_expired(conn: Connection, *, draft_ttl_hours: int) -> None:
         ("DELETE FROM chatreceipt.whatsapp_inbound WHERE status <> 'pending' AND created_at < now() - interval '30 days'", ()),
         ("DELETE FROM chatreceipt.whatsapp_outbound WHERE status <> 'pending' AND created_at < now() - interval '30 days'", ()),
         ("DELETE FROM chatreceipt.web_sign_in_codes WHERE expires_at < now() - interval '1 day'", ()),
+        # The assistant's memory of a conversation lasts a day without messages.
+        ("UPDATE chatreceipt.customers SET memory = '[]' WHERE memory <> '[]'::jsonb AND last_message_at < now() - interval '1 day'", ()),
         ("DELETE FROM chatreceipt.web_sessions WHERE expires_at < now() - interval '1 day'", ()),
     )
     for sql, parameters in statements:
         conn.execute(sql, parameters)
+
+
+# -- Free-text requests (assistant.py) --------------------------------------------------------
+
+
+def queue_request(
+    conn: Connection, customer_id: UUID, text: str, message_id: str, *, has_draft: bool, earlier: Sequence[str] = ()
+) -> None:
+    """Hold a message for the AI to read, with the conversation before it. Answered by ``conversation.finish_request``."""
+    request = {"text": text[:1000], "message_id": message_id, "has_draft": has_draft, "earlier": list(earlier)[-8:], "attempts": 0}
+    conn.execute(
+        "UPDATE chatreceipt.customers SET request = %s, request_lease_until = NULL WHERE id = %s",
+        (Jsonb(request), customer_id),
+    )
+
+
+def claim_request(conn: Connection, *, lease_seconds: float) -> Row | None:
+    """Take the next waiting request, counting the attempt."""
+    return conn.execute(
+        """
+        UPDATE chatreceipt.customers c
+        SET request_lease_until = now() + make_interval(secs => %s),
+            request = c.request || jsonb_build_object('attempts', COALESCE((c.request ->> 'attempts')::int, 0) + 1)
+        WHERE c.id = (
+            SELECT id FROM chatreceipt.customers
+            WHERE request IS NOT NULL AND (request_lease_until IS NULL OR request_lease_until < now())
+            ORDER BY last_message_at
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        )
+        RETURNING c.id, c.request, c.request_lease_until
+        """,
+        (lease_seconds,),
+    ).fetchone()
+
+
+def lock_claimed_request(conn: Connection, customer_id: UUID, lease_until: datetime) -> Row | None:
+    """The customer, with the request cleared, if this worker still holds it. None means discard the result."""
+    customer = lock_customer(conn, customer_id)
+    if customer is None or customer["request"] is None or customer["request_lease_until"] != lease_until:
+        return None
+    conn.execute("UPDATE chatreceipt.customers SET request = NULL, request_lease_until = NULL WHERE id = %s", (customer_id,))
+    return customer
+
+
+def record_counts(conn: Connection, customer_id: UUID) -> Row:
+    """How many records a customer has, and how many still have money owed on them."""
+    return conn.execute(
+        """
+        SELECT count(*) AS records, count(*) FILTER (WHERE outstanding > 0) AS owed
+        FROM chatreceipt.transactions WHERE customer_id = %s AND voided_at IS NULL
+        """,
+        (customer_id,),
+    ).fetchone()  # type: ignore[return-value]
+
+
+def search_transactions(
+    conn: Connection,
+    customer_id: UUID,
+    *,
+    person: str = "",
+    reference: str = "",
+    date_from: date | None = None,
+    date_to: date | None = None,
+    status: str = "any",
+    timezone: str = "UTC",
+    limit: int = 10,
+) -> list[Row]:
+    """A customer's own records matching the filters, newest first. The filters are values, never SQL."""
+    conditions = ["customer_id = %s", "voided_at IS NULL"]
+    parameters: list[Any] = [customer_id]
+    if reference:
+        conditions.append("reference = %s")
+        parameters.append(reference)
+    if person:
+        # A name is matched as text: LIKE wildcards in it are escaped.
+        pattern = "%" + person.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        conditions.append("(seller ILIKE %s OR buyer ILIKE %s)")
+        parameters += [pattern, pattern]
+    day = "COALESCE(transaction_date, (created_at AT TIME ZONE %s)::date)"
+    if date_from is not None:
+        conditions.append(f"{day} >= %s")
+        parameters += [timezone, date_from]
+    if date_to is not None:
+        conditions.append(f"{day} <= %s")
+        parameters += [timezone, date_to]
+    if status == "owed":
+        conditions.append("outstanding > 0")
+    elif status in ("unpaid", "partially_paid", "paid"):
+        conditions.append("payment_status = %s")
+        parameters.append(status)
+    parameters += [timezone, limit]
+    return conn.execute(
+        f"""
+        SELECT {_RECORD_COLUMNS} FROM chatreceipt.transactions
+        WHERE {" AND ".join(conditions)}
+        ORDER BY COALESCE(transaction_date, (created_at AT TIME ZONE %s)::date) DESC, created_at DESC
+        LIMIT %s
+        """,  # noqa: S608 - only fixed column names are interpolated
+        parameters,
+    ).fetchall()
+
+
+# -- Conversation memory -------------------------------------------------------------------------
+
+MEMORY_LINES = 8
+
+
+def remember(conn: Connection, customer_id: UUID, speaker: str, text: str) -> None:
+    """Keep a line of the conversation ("You" or "ChatReceipt"), dropping the oldest beyond MEMORY_LINES."""
+    line = " ".join(text.split())[:240]
+    if not line:
+        return
+    conn.execute(
+        """
+        UPDATE chatreceipt.customers
+        SET memory = (
+            SELECT COALESCE(jsonb_agg(entry ORDER BY position), '[]'::jsonb)
+            FROM (
+                SELECT entry, position FROM jsonb_array_elements(memory || %s::jsonb) WITH ORDINALITY AS lines (entry, position)
+                ORDER BY position DESC
+                LIMIT %s
+            ) recent
+        )
+        WHERE id = %s
+        """,
+        (Jsonb([{"who": speaker, "text": line, "at": datetime.now(UTC).isoformat(timespec="seconds")}]), MEMORY_LINES, customer_id),
+    )
+
+
+def recent_memory(customer: Row, *, within_minutes: int = 360) -> list[dict[str, str]]:
+    """The conversation's recent lines, oldest first; older ones belong to another conversation."""
+    cutoff = datetime.now(UTC).timestamp() - within_minutes * 60
+    lines = []
+    for entry in customer.get("memory") or []:
+        try:
+            at = datetime.fromisoformat(str(entry.get("at"))).timestamp()
+        except ValueError:
+            continue
+        if at >= cutoff and entry.get("text"):
+            lines.append({"who": str(entry.get("who") or ""), "text": str(entry["text"]), "at": str(entry.get("at"))})
+    return lines

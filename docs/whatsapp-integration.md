@@ -46,6 +46,7 @@ The channel adds no second extraction engine. It reuses these parts of the websi
 | Confirm | The record is saved with a reference such as `CR-000001`, and the receipt arrives as an image they can forward |
 | Get PDF | The same receipt as a PDF they can keep or print |
 | `recent` | Their last five saved records |
+| A question in their own words | Answered from their own saved records: “who still owes me?”, “how much did I sell this week?”, “send Ada's receipt again”, “show my records from last month”. Every figure in the answer is added up by ChatReceipt from the records |
 | `web` | A private link to their records, which works once and expires after 15 minutes |
 | `cancel` | The draft is discarded |
 | `help` | How it works |
@@ -60,11 +61,20 @@ WhatsApp labels recent days "Today", "Yesterday" or with a weekday instead of a 
 ### How typed corrections are understood
 
 1. Commands (`confirm`, `try again`, `show`, `cancel` …), bare amounts and common one-line corrections (“he paid 20k”, “balance is 40k”, “35k is the final price”, “the buyer is Emeka”) are read without any AI, which also saves the daily AI quota.
-2. Anything else is read by the AI provider's light model (`GEMINI_LIGHT_MODEL`, by default `gemini-2.5-flash-lite`), given the draft, the question it answers, the open checks and the customer's last few messages about the draft. It only reports what the customer said, as a list of changes.
+2. Anything else is read by the AI provider's light model (`GEMINI_LIGHT_MODEL`, by default `gemini-2.5-flash-lite`), given the draft, the question it answers, the open checks and the last few lines of the conversation. It only reports what the customer said, as a list of changes.
 3. Each change is validated by the same code as the guided corrections, the backend recalculates everything, and the payment status follows the amounts unless the customer chose it.
 4. While a correction is being understood, the customer's next messages wait, so a Confirm tapped meanwhile can't save the old figures.
 
-Check the AI's reading with `python -m evals.whatsapp_corrections` (16 messages from the real test and common phrasings).
+Check the AI's reading with `python -m evals.whatsapp_corrections` (16 corrections from the real test and common phrasings, and 5 questions asked with no draft open; `--only` runs named cases to save quota).
+
+### Questions about saved records
+
+With no draft open, a message that isn't a command is treated as a question (`app/whatsapp/assistant.py`):
+
+1. Common phrasings are recognised without the AI: “who still owes me?”, “how much did I sell this week?”, “how many records”, “clear my records”, a reference such as `CR-000012`.
+2. Anything else is read by the same light model, in the context of the conversation, which says what is being asked (records for a person, a period or a payment status; money owed; totals; a receipt to send again; something ChatReceipt can't do, such as checking a bank transfer).
+3. The answer comes from the customer's own records. The AI never supplies a figure: totals and amounts owed are added up per currency by the backend. A name or reference is searched for only if the message contains it, and the AI's one-line reaction is dropped if it states a figure the customer didn't write or says a payment is verified.
+4. While a question is being read, the customer's next messages wait, so replies stay in order.
 
 ## Customer identity
 
@@ -98,8 +108,9 @@ The repository had no accounts, so a customer is identified by the sender on Met
 - Screenshots are sent to the configured AI provider to be read.
 - Receipt images and PDFs are created when they're sent and aren't stored by ChatReceipt. They're uploaded to WhatsApp to be delivered, and Meta holds them under its own terms.
 - Confirmed records are stored until the customer deletes them. Unconfirmed drafts are deleted after 72 hours.
-- Message text is cleared once handled, and reply content is cleared once sent.
-- Typed corrections are sent to the AI provider to be understood. The last four messages about a draft are kept with it as context, and are deleted when the draft is saved, cancelled or expires.
+- Message text is cleared from the message queue once handled, and reply content once sent.
+- Typed messages that aren't commands are sent to the AI provider to be understood, with the recent conversation. The last four messages about a draft are kept with it, and are deleted when the draft is saved, cancelled or expires.
+- The last eight lines of the conversation (the customer's and ChatReceipt's, up to 240 characters each) are kept with the customer, so that a reply like “yes” is read in context. They're cleared after a day without messages, and deleted with the rest of the customer's data.
 - Logs contain counts, codes and durations, never phone numbers or conversation content.
 - All tables are in a private `chatreceipt` schema with row-level security on and no policies, so Supabase's public REST API can't read them.
 

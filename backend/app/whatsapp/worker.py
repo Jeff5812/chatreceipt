@@ -15,6 +15,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 from typing import Any
 from uuid import UUID
@@ -28,7 +29,7 @@ from app.models import TransactionDraft
 from app.observability import configure_logging, log_event
 from app.whatsapp import store
 from app.whatsapp.client import CUSTOMER_WINDOW_CLOSED, WhatsAppAPIError, WhatsAppClient
-from app.whatsapp.conversation import finish_instruction, handle_inbound
+from app.whatsapp.conversation import finish_instruction, finish_request, handle_inbound
 from app.whatsapp.messages import RECEIPT_REQUEST, text_message
 from app.whatsapp.processing import (
     TRY_AGAIN,
@@ -174,14 +175,51 @@ class WhatsAppWorker:
                     draft,
                     checks=[message for _, message in open_reasons(review, claimed["edited_fields"])],
                     question=current_question(draft, str(instruction.get("target") or "")),
-                    earlier=list(claimed.get("dialogue") or []),
+                    earlier=list(instruction.get("earlier") or claimed.get("dialogue") or []),
                     message=str(instruction.get("text") or ""),
+                    today=self._today(),
                 ),
                 timeout=self._settings.whatsapp_understanding_timeout_seconds,
             )
         except (TimeoutError, AIProviderError) as exc:
             log_event("whatsapp.understanding_failed", reason=getattr(getattr(exc, "kind", None), "value", type(exc).__name__))
             return None
+
+    def _today(self) -> date:
+        return datetime.now(ZoneInfo(self._settings.whatsapp_timezone)).date()
+
+    def _claim_request(self) -> Row | None:
+        with self._db.transaction() as conn:
+            return store.claim_request(conn, lease_seconds=self._settings.whatsapp_understanding_timeout_seconds + 30)
+
+    async def answer_next_request(self) -> bool:
+        """Read one free-text request with the AI, in context, then answer it in its own transaction."""
+        claimed = await asyncio.to_thread(self._claim_request)
+        if claimed is None:
+            return False
+        pending = claimed["request"] or {}
+        message_id = str(pending.get("message_id") or "")
+        if message_id:
+            await self._client.show_typing(message_id)
+        started = time.monotonic()
+        reading: AICorrection | None = None
+        if self._understands and int(pending.get("attempts") or 0) <= _INSTRUCTION_ATTEMPTS:
+            try:
+                reading = await asyncio.wait_for(
+                    understand(
+                        self._provider, None, checks=[], question="", earlier=list(pending.get("earlier") or []),
+                        message=str(pending.get("text") or ""), today=self._today(),
+                    ),
+                    timeout=self._settings.whatsapp_understanding_timeout_seconds,
+                )
+            except (TimeoutError, AIProviderError) as exc:
+                log_event("whatsapp.understanding_failed", reason=getattr(getattr(exc, "kind", None), "value", type(exc).__name__))
+        log_event(
+            "whatsapp.request_understood", understood=reading is not None, intent=reading.intent if reading else None,
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
+        await asyncio.to_thread(self._finish, finish_request, claimed, reading)
+        return True
 
     async def interpret_next_instruction(self) -> bool:
         """Read one typed correction with the AI, then apply it in its own transaction."""
@@ -306,6 +344,7 @@ class WhatsAppWorker:
             self.send_next_outbound,
             self.run_maintenance,
             self.interpret_next_instruction,
+            self.answer_next_request,
             *[self.process_next_submission] * max(1, self._settings.whatsapp_extraction_concurrency),
         ]
         self._tasks = [asyncio.create_task(self._loop(step)) for step in steps]
@@ -324,6 +363,8 @@ class WhatsAppWorker:
             while await self.handle_next_inbound():
                 worked = True
             while await self.interpret_next_instruction():
+                worked = True
+            while await self.answer_next_request():
                 worked = True
             worked = await self.process_next_submission() or worked
             while await self.send_next_outbound():

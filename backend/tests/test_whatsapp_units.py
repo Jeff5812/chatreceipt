@@ -278,3 +278,109 @@ def test_the_welcome_points_to_the_command_menu() -> None:
     from app.whatsapp.conversation import WELCOME
 
     assert "Type */*" in WELCOME and "delete my data" in WELCOME
+
+
+# -- requests in their own words (app/whatsapp/assistant.py) ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "intent", "period"),
+    [
+        ("who still owes me?", "money_owed", "any"),
+        ("Who dey owe me", "money_owed", "any"),
+        ("how much did I sell this week", "totals", "this_week"),
+        ("how many receipts", "totals", "any"),
+        ("clear all my records", "delete_data", "any"),
+        ("show my receipts", "list_records", "any"),
+        ("thank you", "thanks", "any"),
+    ],
+)
+def test_common_requests_are_read_without_the_ai(text: str, intent: str, period: str) -> None:
+    from app.whatsapp.assistant import quick_request
+
+    request = quick_request(text)
+    assert request is not None and (request.intent, request.period) == (intent, period)
+
+
+def test_a_reference_in_a_message_finds_or_resends_that_record() -> None:
+    from app.whatsapp.assistant import Request, quick_request
+
+    assert quick_request("resend CR-000012 as pdf") == Request("resend_receipt", reference="CR-000012", format="pdf")
+    assert quick_request("what about CR000012") == Request("find_records", reference="CR-000012")
+
+
+@pytest.mark.parametrize("text", ["he still owes 40k", "who still owes me?", "thanks", "it's 20k", "the buyer is Emeka"])
+def test_with_a_draft_open_anything_that_could_be_a_correction_is_left_to_the_draft(text: str) -> None:
+    from app.whatsapp.assistant import quick_request
+
+    assert quick_request(text, has_draft=True) is None
+
+
+def test_messages_that_arent_requests_are_left_for_the_ai() -> None:
+    from app.whatsapp.assistant import quick_request
+
+    assert quick_request("abeg show me wetin Ada buy") is None
+    assert quick_request("   ") is None
+
+
+def test_the_ais_wording_is_dropped_when_it_states_a_figure_or_a_verification() -> None:
+    from app.whatsapp.understanding import safe_reply
+
+    assert safe_reply("Got it, the buyer is Emeka.", "change the buyer to Emeka") == "Got it, the buyer is Emeka."
+    assert safe_reply("Done, 20k is noted.", "he paid 20k") == "Done, 20k is noted."
+    # Figures in replies come from ChatReceipt's own records, never the model, even when they look the same.
+    assert safe_reply("He paid ₦20,000.", "he paid 20k") == ""
+    assert safe_reply("Zainab owes you 5000.", "who owes me") == ""
+    assert safe_reply("That's ₦ noted", "noted") == ""
+    assert safe_reply("Payment verified ✅", "he paid") == ""
+    assert safe_reply("", "anything") == ""
+
+
+def test_a_name_or_reference_the_message_doesnt_contain_is_never_searched_for() -> None:
+    from app.whatsapp.assistant import request_from
+    from app.whatsapp.understanding import AICorrection
+
+    asked = "show me what Ada bought"
+    assert request_from(AICorrection(intent="find_records", person="Ada"), asked).person == "Ada"
+    assert request_from(AICorrection(intent="find_records", person="Zainab"), asked).person == ""
+    assert request_from(AICorrection(intent="resend_receipt", reference="CR-000009"), asked).reference == ""
+    assert request_from(AICorrection(intent="resend_receipt", reference="cr000009"), "send CR-000009").reference == "CR-000009"
+
+
+def test_periods_cover_whole_days_across_month_and_year_ends() -> None:
+    from datetime import date
+
+    from app.whatsapp.assistant import period_range
+
+    wednesday = date(2026, 1, 7)
+    assert period_range("today", wednesday) == (wednesday, wednesday)
+    assert period_range("this_week", wednesday) == (date(2026, 1, 5), wednesday)
+    assert period_range("last_week", wednesday) == (date(2025, 12, 29), date(2026, 1, 4))
+    assert period_range("last_month", wednesday) == (date(2025, 12, 1), date(2025, 12, 31))
+    assert period_range("this_year", wednesday) == (date(2026, 1, 1), wednesday)
+    assert period_range("any", wednesday) == (None, None)
+
+
+def test_amounts_owed_and_totals_are_added_up_per_currency() -> None:
+    from decimal import Decimal
+
+    from app.whatsapp.assistant import owed_text, totals_text
+
+    rows = [
+        {"buyer": "Ada", "seller": "", "currency": "NGN", "reference": "CR-000001", "total": Decimal("20000"), "amount_paid": Decimal("15000"), "outstanding": Decimal("5000")},
+        {"buyer": "", "seller": "Tunde", "currency": "USD", "reference": "CR-000002", "total": Decimal("12.5"), "amount_paid": None, "outstanding": Decimal("12.5")},
+        {"buyer": "Ada", "seller": "", "currency": "NGN", "reference": "CR-000003", "total": Decimal("2500"), "amount_paid": Decimal("0"), "outstanding": Decimal("2500")},
+    ]
+    assert owed_text(rows, "this week").splitlines() == [
+        "*Still owed this week*",
+        "• Ada: ₦5,000.00 (CR-000001)",
+        "• Tunde: $12.50 (CR-000002)",
+        "• Ada: ₦2,500.00 (CR-000003)",
+        "",
+        "Total still owed: ₦7,500.00, $12.50",
+    ]
+    assert totals_text(rows, "").splitlines() == [
+        "*Your records* · 3 records",
+        "Agreed ₦22,500.00 · paid ₦15,000.00 · still owed ₦7,500.00",
+        "Agreed $12.50 · paid $0.00 · still owed $12.50",
+    ]

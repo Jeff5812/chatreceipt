@@ -414,7 +414,9 @@ def test_the_real_conversation_ends_with_the_right_figures(setup: Any) -> None:
     assert record["payment_status"] == "partially_paid"
     assert channel.graph.sent[-2]["type"] == "image"
     request = provider.requests[0].parts[0].text  # type: ignore[attr-defined]
-    assert "It's an advance work. 40k was still remaining" in request and "can you try again" not in request
+    # Earlier lines are context only; the message to read is the last thing the AI is given.
+    assert request.endswith("The person's latest message:\nIt's an advance work. 40k was still remaining")
+    assert "- You: can you try again" in request.split("The person's latest message:")[0]
 
 
 def test_the_ai_marking_it_part_paid_still_leads_to_the_one_tap_fix(setup: Any) -> None:
@@ -1219,3 +1221,82 @@ def test_hi_is_never_taken_as_the_answer_to_a_question(setup: Any) -> None:
     assert channel.graph.last_body().startswith("Hi again")
     [row] = channel.rows("SELECT draft FROM chatreceipt.whatsapp_submissions WHERE status = 'awaiting_confirmation'")
     assert row["draft"]["seller"] != "hi"
+
+
+# -- questions about saved records (assistant.py) ---------------------------------------------------
+
+
+def saved_record(channel: Channel, who: dict[str, str] = ALICE) -> None:
+    """Make and confirm one record: the bag conversation, ₦19,000 agreed and nothing paid yet."""
+    draft_ready(channel, who)
+    channel.tap(who, "Confirm")
+    assert "Saved as" in channel.graph.last_body()
+
+
+def test_who_owes_me_is_answered_from_saved_records_without_the_ai(setup: Any) -> None:
+    channel, provider = setup(bag_conversation_output(buyer=field("Ada Obi")))
+    saved_record(channel)
+
+    channel.say(ALICE, "who still owes me?")
+    answer = channel.graph.last_body()
+    assert "• Ada Obi: ₦19,000.00 (CR-000001)" in answer and "Total still owed: ₦19,000.00" in answer
+
+    channel.say(ALICE, "how many records do I have")
+    assert "· 1 record\nAgreed ₦19,000.00 · paid ₦0.00 · still owed ₦19,000.00" in channel.graph.last_body()
+    assert len(provider.calls) == 1  # only the screenshot was read
+
+
+def test_a_question_in_their_own_words_is_read_in_context_and_answered_from_records(setup: Any) -> None:
+    channel, provider = setup(
+        bag_conversation_output(buyer=field("Ada Obi")),
+        corrections=[
+            {**said(intent="find_records"), "person": "Ada", "reply": "Sure, here's what Ada bought."},
+            # A name the message doesn't contain and a figure ChatReceipt didn't add up are both dropped.
+            {**said(intent="money_owed"), "person": "Zainab", "reply": "Zainab owes you ₦5,000."},
+        ],
+    )
+    saved_record(channel)
+
+    channel.say(ALICE, "abeg show me wetin Ada buy")
+    answer = channel.graph.last_body()
+    assert answer.startswith("Sure, here's what Ada bought.\n\n*Your records for Ada*") and "CR-000001" in answer
+    assert channel.graph.offered() == {"Send the receipt", "Send the PDF"}
+    request = provider.requests[0].parts[0].text  # type: ignore[attr-defined]
+    assert "No receipt draft is open." in request and request.endswith("The person's latest message:\nabeg show me wetin Ada buy")
+    assert "Saved as CR-000001" in request.split("The person's latest message:")[0]  # what came before, for context
+
+    sent = len(channel.graph.sent)
+    channel.tap(ALICE, "Send the receipt")
+    assert [message["type"] for message in channel.graph.sent[sent:]] == ["image"]
+
+    channel.say(ALICE, "any of my customers still owing me money?")
+    answer = channel.graph.last_body()
+    assert answer.startswith("*Still owed*") and "Zainab" not in answer and "₦5,000" not in answer
+    assert "• Ada Obi: ₦19,000.00 (CR-000001)" in answer
+
+
+def test_a_message_sent_while_a_question_is_being_read_waits_its_turn(setup: Any) -> None:
+    channel, _ = setup(corrections=[said(intent="help")])
+    channel.say(ALICE, "hi")
+    sent = len(channel.graph.sent)
+    assert channel.deliver(channel.text_event(ALICE, "what can you do for me"), channel.text_event(ALICE, "recent")).status_code == 200
+    channel.work()
+    first, second = [channel.graph.body_of(message) for message in channel.graph.sent[sent:]]
+    assert "*Or just ask*" in first and "*Or just ask*" not in second
+
+
+def test_when_the_ai_cant_read_a_question_the_person_is_told(setup: Any) -> None:
+    channel, _ = setup(corrections=[ExtractionProviderError(ErrorKind.UNAVAILABLE, "down")])
+    channel.say(ALICE, "hi")
+    channel.say(ALICE, "abeg wetin dey happen for my account")
+    assert channel.graph.last_body() == conversation.NOT_UNDERSTOOD_REQUEST
+    assert channel.rows("SELECT 1 FROM chatreceipt.customers WHERE request IS NOT NULL") == []
+
+
+def test_deleting_my_data_also_forgets_the_conversation(setup: Any) -> None:
+    channel, _ = setup()
+    saved_record(channel)
+    assert channel.rows("SELECT 1 FROM chatreceipt.customers WHERE memory <> '[]'::jsonb")
+    channel.say(ALICE, "please clear all my records")
+    channel.tap(ALICE, "Delete everything")
+    assert channel.rows("SELECT * FROM chatreceipt.customers") == [] and saved(channel) == []

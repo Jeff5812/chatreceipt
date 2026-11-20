@@ -23,8 +23,9 @@ from app.config import Settings
 from app.currencies import get_currency
 from app.db.pool import Connection
 from app.models import PaymentStatus, TransactionDraft
-from app.whatsapp import corrections, store
-from app.whatsapp.messages import ReplyId, button_message, parse_reply_id, receipt_request, reply_id, text_message
+from app.whatsapp import assistant, corrections, store
+from app.whatsapp.messages import ReplyId, button_message, list_message, parse_reply_id, receipt_request, reply_id, text_message
+from app.whatsapp.messages import Row as ChoiceRow
 from app.whatsapp.receipts import RECORD_GONE
 from app.whatsapp.reconcile import accept, proposal, settle_status
 from app.whatsapp.store import Row
@@ -38,10 +39,20 @@ from app.whatsapp.summary import (
     receipt_caption,
     recent_text,
     saved_text,
+    money,
     typed_value_needed,
     update_messages,
 )
-from app.whatsapp.understanding import AICorrection, amount_reply, apply_changes, is_money_path, item_reply, quick_changes
+from app.whatsapp.understanding import (
+    DRAFT_INTENTS,
+    AICorrection,
+    amount_reply,
+    apply_changes,
+    is_money_path,
+    item_reply,
+    quick_changes,
+    safe_reply,
+)
 
 WELCOME = (
     "Hi, I'm *ChatReceipt* 👋\n"
@@ -73,8 +84,21 @@ HELP = (
     "• *web* to open your records in a browser\n"
     "• *cancel* to stop working on a draft\n"
     "• *delete my data* to remove everything\n\n"
+    "*Or just ask*, for example:\n"
+    "• who still owes me?\n"
+    "• how much did I sell this week?\n"
+    "• send Ada's receipt again\n"
+    "• show my records from last month\n\n"
     "ChatReceipt records what a conversation says. It doesn't verify payments."
 )
+THANKS_REPLY = "You're welcome 🙂 Send a screenshot whenever you need another receipt."
+NOT_SURE = "I'm not sure what you need. I can make a receipt from screenshots, find your saved records or tell you who still owes you. What would you like?"
+NOT_UNDERSTOOD_REQUEST = "I couldn't work that out just now. Ask me again in a moment, or send *help* to see what I can do."
+NO_DRAFT_OPEN = "There's no receipt open to change right now. Send a screenshot of the chat to start one."
+NOTHING_FOUND = "I couldn't find a saved record {what}. Send *recent* to see your latest ones."
+NOTHING_OWED = "Nothing is owed on your saved records {what}."
+WHICH_RECORD = "I found {count} records {what}. Which one should I send?"
+ALREADY_DONE = "I've already got that one 👍"
 UNSUPPORTED = "I can only read screenshots (JPEG, PNG or WebP) and text messages. Please send a screenshot of the chat or payment."
 NOTHING_OPEN = "There's no draft to work on right now. Send a screenshot to start one."
 NOTHING_TO_RETRY = "There's nothing to read again right now. Send the screenshot and I'll read it."
@@ -169,6 +193,8 @@ class Turn:
         # The incoming message being handled, and whether an AI is available to read free text.
         self.message_id = message_id
         self.understanding = understanding
+        # The conversation before the message being handled, set by on_text.
+        self.earlier: list[str] = []
         self._sent = 0
 
     @property
@@ -179,6 +205,7 @@ class Turn:
     def send(self, payload: dict[str, Any]) -> None:
         self._sent += 1
         store.enqueue(self.conn, self.customer, payload, f"{self.key}:{self._sent}")
+        store.remember(self.conn, self.customer["id"], "ChatReceipt", _gist(payload))
 
     def say(self, body: str) -> None:
         self.send(text_message(body))
@@ -197,6 +224,174 @@ class Turn:
 
     def menu(self) -> None:
         self.send(button_message("What would you like to do?", self._main_buttons()))
+
+    def greet(self) -> None:
+        """A returning customer says hello: welcome them back, with where their records stand."""
+        counts = store.record_counts(self.conn, self.customer["id"])
+        lines = ["Hi again 👋 Send me screenshots of a chat and I'll make the receipt."]
+        if counts["records"]:
+            records = f"{counts['records']} saved record{'s' if counts['records'] != 1 else ''}"
+            owed = f", and money is still owed on {counts['owed']} of them" if counts["owed"] else ""
+            lines.append(f"You have {records}{owed}. Ask me anything about them, like *who still owes me?*")
+        self.say("\n\n".join(lines))
+
+    def ask_erase(self) -> None:
+        self.send(button_message(ERASE_PROMPT, [(reply_id("erase", arg="yes"), "Delete everything"), (reply_id("erase", arg="no"), "Keep my data")]))
+
+    def _repeated(self, text: str) -> bool:
+        """The same request again within a few minutes, already answered: don't read it twice.
+
+        A request that failed ("I couldn't work that out") can always be sent again.
+        """
+        if len(text.split()) < 2:
+            return False
+        lines = store.recent_memory(self.customer, within_minutes=3)
+        mine = [index for index, line in enumerate(lines) if line["who"] == "You" and normalise(line["text"]) == normalise(text)]
+        if not mine:
+            return False
+        answers = [line["text"] for line in lines[mine[-1] + 1 :] if line["who"] == "ChatReceipt"]
+        failed = ("couldn't work that out", "not sure what you need", "didn't catch")
+        return bool(answers) and not any(phrase in answer for answer in answers for phrase in failed)
+
+    # -- requests in their own words (assistant.py) ----------------------------------------------
+
+    def after_request(self, text: str, reading: AICorrection | None) -> None:
+        """Answer a message read by the AI while no draft was open (or read without it, if it was down)."""
+        if reading is None:
+            quick = assistant.quick_request(text)
+            if quick is not None:
+                self.assist(quick)
+            else:
+                self.say(NOT_UNDERSTOOD_REQUEST)
+            return
+        intent = reading.intent
+        reply = safe_reply(reading.reply, text)
+        if intent in DRAFT_INTENTS:
+            if intent == "read_again":
+                self.read_again(store.open_submission(self.conn, self.customer["id"]))
+            elif intent == "new_record":
+                self.say(ASK_FOR_IMAGE)
+            elif intent == "show_record":
+                self.recent()
+            else:
+                self.say(NO_DRAFT_OPEN)
+        elif intent == "unclear":
+            self.say(reading.question or NOT_SURE)
+        elif intent == "greeting":
+            self.greet()
+        elif intent == "thanks":
+            self.say(reply or THANKS_REPLY)
+        elif intent == "help":
+            self.send(button_message(HELP, self._main_buttons()[:2]))
+        elif intent == "make_receipt":
+            self.say("\n\n".join(part for part in (reply, ASK_FOR_IMAGE) if part))
+        elif intent == "other":
+            self.say(reply or NOT_SURE)
+        else:
+            self.assist(assistant.request_from(reading, text), lead=reply)
+
+    def assist(self, request: assistant.Request, *, lead: str = "") -> None:
+        """Do what a request asks, with every figure taken from the customer's own records."""
+        intent = request.intent
+        if intent == "greeting":
+            self.greet()
+        elif intent == "thanks":
+            self.say(THANKS_REPLY)
+        elif intent == "help":
+            self.send(button_message(HELP, self._main_buttons()[:2]))
+        elif intent == "make_receipt":
+            self.say(ASK_FOR_IMAGE)
+        elif intent == "web_link":
+            self.web_link()
+        elif intent == "delete_data":
+            self.ask_erase()
+        elif intent == "list_records" and request == assistant.Request("list_records", format=request.format):
+            self.recent()
+        elif intent in ("list_records", "find_records"):
+            self.find_records(request, lead)
+        elif intent == "money_owed":
+            self.money_owed(request, lead)
+        elif intent == "totals":
+            self.totals(request, lead)
+        elif intent == "resend_receipt":
+            self.resend(request, lead)
+        else:
+            self.say(NOT_SURE)
+
+    def _search(self, request: assistant.Request, *, status: str | None = None, limit: int = 10) -> list[Row]:
+        date_from, date_to = assistant.period_range(request.period, self.today)
+        return store.search_transactions(
+            self.conn, self.customer["id"], person=request.person, reference=request.reference, date_from=date_from,
+            date_to=date_to, status=status or request.status, timezone=self.settings.whatsapp_timezone, limit=limit,
+        )
+
+    def _say_with(self, lead: str, body: str) -> None:
+        self.say(f"{lead}\n\n{body}" if lead else body)
+
+    def find_records(self, request: assistant.Request, lead: str = "") -> None:
+        rows = self._search(request, limit=5)
+        what = assistant.describe(request)
+        if not rows:
+            self.say(_tidy(NOTHING_FOUND.format(what=what or "like that")))
+            return
+        body = recent_text(rows).replace("*Your recent records*", _tidy(f"*Your records {what}*"))
+        if lead:
+            body = f"{lead}\n\n{body}"
+        if len(rows) == 1:
+            record = str(rows[0]["id"])
+            self.send(button_message(body, [(reply_id("receipt", arg=record), "Send the receipt"), (reply_id("pdf", arg=record), "Send the PDF")]))
+        else:
+            self.say(body)
+
+    def money_owed(self, request: assistant.Request, lead: str = "") -> None:
+        rows = self._search(request, status="owed", limit=30)
+        if not rows:
+            self.say(_tidy(NOTHING_OWED.format(what=assistant.describe(request))))
+            return
+        self._say_with(lead, assistant.owed_text(rows, assistant.describe(request)))
+
+    def totals(self, request: assistant.Request, lead: str = "") -> None:
+        rows = self._search(request, limit=1000)
+        if not rows:
+            self.say(_tidy(NOTHING_FOUND.format(what=assistant.describe(request) or "yet")))
+            return
+        self._say_with(lead, assistant.totals_text(rows, assistant.describe(request)))
+
+    def resend(self, request: assistant.Request, lead: str = "") -> None:
+        rows = self._search(request, limit=10)
+        what = assistant.describe(request)
+        if not rows:
+            self.say(_tidy(NOTHING_FOUND.format(what=what or "like that")))
+        elif len(rows) == 1:
+            if lead:
+                self.say(lead)
+            self.resend_one(str(rows[0]["id"]), request.format)
+        else:
+            action = "pdf" if request.format == "pdf" else "receipt"
+            choices = [
+                ChoiceRow(
+                    id=reply_id(action, arg=str(row["id"])),
+                    title=row["reference"],
+                    description=" · ".join(part for part in (row["buyer"] or row["seller"], money(row["total"], get_currency(row["currency"]))) if part),
+                )
+                for row in rows
+            ]
+            self.send(list_message(_tidy(WHICH_RECORD.format(count=len(rows), what=what)), "Choose a record", choices))
+
+    def resend_one(self, transaction_id: str, fmt: str) -> None:
+        """Send one of this customer's own receipts again, as an image, a PDF or both."""
+        try:
+            record = store.get_transaction(self.conn, self.customer["id"], UUID(transaction_id))
+        except ValueError:
+            record = None
+        if record is None:
+            self.say(RECORD_GONE)
+            return
+        if fmt in ("image", "both"):
+            draft = TransactionDraft.model_validate(record["draft"])
+            self.send(receipt_request(str(record["id"]), "png", receipt_caption(record["reference"], draft)))
+        if fmt in ("pdf", "both"):
+            self.send_pdf(str(record["id"]))
 
     def welcome_back(self, submission: Row) -> None:
         """A greeting while a draft is open: say hello and let them pick up the draft or start over."""
@@ -501,7 +696,10 @@ class Turn:
         store.update_submission(
             self.conn,
             submission["id"],
-            instruction={"text": text[:1000], "message_id": self.message_id, "revision": submission["revision"], "target": target},
+            instruction={
+                "text": text[:1000], "message_id": self.message_id, "revision": submission["revision"], "target": target,
+                "earlier": getattr(self, "earlier", []),
+            },
         )
 
     def _on_draft_text(self, submission: Row, text: str) -> None:
@@ -513,7 +711,10 @@ class Turn:
             self._remember(submission, text)
             self._apply_correction(submission, AICorrection(intent="correct", changes=changes))
             return
-        if self.understanding and not quick:
+        if self.understanding and not quick and self._repeated(text):
+            # The same message again: don't pay to read it twice, or add an item twice.
+            self.show_draft(submission, lead=ALREADY_DONE)
+        elif self.understanding and not quick:
             # No pending target: the AI is told the question the draft message itself asked.
             self._queue(submission, text)
         elif target and normalise(text) not in _BACK:
@@ -539,6 +740,9 @@ class Turn:
     # -- incoming text ------------------------------------------------------------------------
 
     def on_text(self, text: str) -> None:
+        # The conversation before this message, for reading it in context; then this message joins it.
+        self.earlier = [f"{line['who']}: {line['text']}" for line in store.recent_memory(self.customer)]
+        store.remember(self.conn, self.customer["id"], "You", text)
         submission = store.open_submission(self.conn, self.customer["id"])
         command = command_of(text)
         awaiting = submission is not None and submission["status"] == "awaiting_confirmation"
@@ -572,7 +776,7 @@ class Turn:
         elif command == "retry":
             self.read_again(submission)
         elif command == "erase":
-            self.send(button_message(ERASE_PROMPT, [(reply_id("erase", arg="yes"), "Delete everything"), (reply_id("erase", arg="no"), "Keep my data")]))
+            self.ask_erase()
         elif command == "cancel":
             if submission is None:
                 self.say(NOTHING_OPEN)
@@ -580,9 +784,16 @@ class Turn:
                 self.cancel(submission)
         elif submission is None:
             if command == "greeting":
-                self.menu()
+                self.greet()
+            elif (request := assistant.quick_request(text)) is not None:
+                self.assist(request)
+            elif not self.understanding:
+                self.say(NOT_SURE)
+            elif self._repeated(text):
+                self.say(ALREADY_DONE)
             else:
-                self.send(button_message(ASK_FOR_IMAGE, self._main_buttons()))
+                # Read by the AI outside this transaction; answered through finish_request.
+                store.queue_request(self.conn, self.customer["id"], text, self.message_id, has_draft=False, earlier=self.earlier)
         elif submission["status"] != "awaiting_confirmation":
             self.say(STILL_READING)
         elif command == "confirm":
@@ -591,6 +802,8 @@ class Turn:
             self._open_corrections(submission)
         elif command == "show":
             self.show_draft(submission)
+        elif (request := assistant.quick_request(text, has_draft=True)) is not None:
+            self.assist(request)
         else:
             self._on_draft_text(submission, text)
 
@@ -621,6 +834,7 @@ class Turn:
             return
 
         intent = correction.intent
+        reply = safe_reply(correction.reply, text)
         if intent == "confirm":
             self.confirm(submission)
         elif intent == "cancel":
@@ -633,10 +847,21 @@ class Turn:
             self.start_again(submission)
         elif intent == "help":
             self.send(button_message(HELP, self._main_buttons()[:2]))
+        elif intent == "greeting":
+            self.welcome_back(submission)
+        elif intent == "thanks":
+            self.say(reply or THANKS_REPLY)
+        elif intent == "make_receipt":
+            self.say(ASK_FOR_IMAGE)
+        elif intent == "other":
+            self.say(reply or NOT_SURE)
+        elif intent in assistant.RECORD_INTENTS:
+            # A question about saved records in the middle of a draft: answered, and the draft stays open.
+            self.assist(assistant.request_from(correction, text), lead=reply)
         else:
-            self._apply_correction(submission, correction)
+            self._apply_correction(submission, correction, lead=reply)
 
-    def _apply_correction(self, submission: Row, correction: AICorrection) -> None:
+    def _apply_correction(self, submission: Row, correction: AICorrection, *, lead: str = "") -> None:
         """Apply the changes a message makes, however they were read, and reply with a short update."""
         applied = apply_changes(draft_of(submission), correction.changes, today=self.today)
         review = dict(submission["review"] or {})
@@ -656,7 +881,7 @@ class Turn:
             return
         if not notes and not applied.problems:
             notes = ["Thanks, I've cleared that check."]
-        self.show_update(updated, notes, applied.problems)
+        self.show_update(updated, notes, applied.problems, lead=f"✅ {lead}" if lead else "✅ *Updated*")
 
     # -- taps on buttons and lists ------------------------------------------------------------
 
@@ -670,6 +895,8 @@ class Turn:
             self._on_erase(reply.arg)
         elif reply.action == "pdf":
             self.send_pdf(reply.arg)
+        elif reply.action == "receipt":
+            self.resend_one(reply.arg, "image")
         else:
             self._on_draft_reply(reply)
 
@@ -923,6 +1150,9 @@ def handle_inbound(conn: Connection, settings: Settings, row: Row, *, understand
         turn.on_image(payload, row["message_id"])
     elif first_contact:
         turn.welcome()
+        text = payload.get("text", "") if kind == "text" else ""
+        if text and command_of(text) != "greeting":
+            turn.on_text(text)
     elif kind == "text":
         turn.on_text(payload.get("text", ""))
     elif kind == "reply":
@@ -942,3 +1172,32 @@ def finish_instruction(conn: Connection, settings: Settings, claimed: Row, corre
     key = f"ins:{instruction.get('message_id') or submission['revision']}"
     submission = store.update_submission(conn, submission["id"], instruction=None, lease_token=None, lease_expires_at=None)
     Turn(conn, settings, customer, key).after_interpretation(submission, instruction, correction)
+
+
+def _tidy(text: str) -> str:
+    """Tidy a message built from optional parts: no double spaces, no space before a full stop."""
+    return " ".join(text.split(" ")).replace("  ", " ").replace(" .", ".").replace(" *", "*")
+
+
+def _gist(payload: dict[str, Any]) -> str:
+    """What a message said, in one line, for the conversation memory."""
+    kind = str(payload.get("type") or "")
+    section = payload.get(kind) if isinstance(payload.get(kind), dict) else {}
+    if kind == "text":
+        body = section.get("body", "")
+    elif kind == "interactive":
+        body = section.get("body", {}).get("text", "")
+    else:
+        body = section.get("caption", "") or str(payload.get("caption") or "") or "(sent a receipt)"
+    return " ".join(str(body).replace("*", "").replace("_", "").split())[:200]
+
+
+def finish_request(conn: Connection, settings: Settings, claimed: Row, reading: AICorrection | None) -> None:
+    """Answer a free-text request the AI has read, if this worker still holds it."""
+    customer = store.lock_claimed_request(conn, claimed["id"], claimed["request_lease_until"])
+    if customer is None:
+        return
+    pending = dict(claimed["request"] or {})
+    message_id = str(pending.get("message_id") or "")
+    key = f"req:{message_id or claimed['request_lease_until'].isoformat()}"
+    Turn(conn, settings, customer, key, message_id=message_id).after_request(str(pending.get("text") or ""), reading)

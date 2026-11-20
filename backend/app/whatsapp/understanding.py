@@ -144,7 +144,16 @@ CHANGE_FIELDS = (
     "delivery_fee", "discount", "total", "amount_paid", "balance", "payment_status",
     "payment_terms", "delivery_terms", "notes",
 )
-INTENTS = ("correct", "confirm", "cancel", "read_again", "show_record", "new_record", "help", "unclear")
+# About the open draft, then about everything else ChatReceipt does (answered from saved records).
+DRAFT_INTENTS = ("correct", "confirm", "cancel", "read_again", "show_record", "new_record")
+REQUEST_INTENTS = (
+    "greeting", "thanks", "help", "make_receipt", "list_records", "find_records", "money_owed", "totals",
+    "resend_receipt", "web_link", "delete_data", "other",
+)
+INTENTS = (*DRAFT_INTENTS, *REQUEST_INTENTS, "unclear")
+PERIODS = ("any", "today", "yesterday", "this_week", "last_week", "this_month", "last_month", "this_year")
+RECORD_STATUSES = ("any", "owed", "unpaid", "partially_paid", "paid")
+FORMATS = ("image", "pdf", "both")
 _STATUSES = tuple(status.value for status in PaymentStatus)
 
 
@@ -180,13 +189,24 @@ CORRECTION_SCHEMA = _object(
             "type": "string",
             "description": "When intent is unclear: one short, friendly question. Otherwise empty.",
         },
+        "reply": {
+            "type": "string",
+            "description": "One short, natural sentence reacting to what they said, in their own way of speaking. "
+            "No amounts, totals, dates or names unless they wrote them. Empty when intent is unclear.",
+        },
+        "person": {"type": "string", "description": "For record requests: a name the message mentions, copied exactly. Otherwise empty."},
+        "reference": {"type": "string", "description": "For record requests: a reference such as CR-000012 the message mentions. Otherwise empty."},
+        "period": {"type": "string", "enum": list(PERIODS)},
+        "status": {"type": "string", "enum": list(RECORD_STATUSES)},
+        "format": {"type": "string", "enum": list(FORMATS)},
     }
 )
 
 CORRECTION_PROMPT = f"""\
-You help someone correct a transaction record on WhatsApp. ChatReceipt built the record from a \
-screenshot of a chat or a payment, and the person is telling you what is wrong or missing. Turn \
-their latest message into changes to the record.
+You are ChatReceipt's assistant on WhatsApp. ChatReceipt turns screenshots of chats and payments into \
+receipts, and keeps the receipts a person confirms. Read the person's latest message in the context \
+of the conversation so far and of their open draft, if there is one, and say what they want: changes \
+to the draft, something about their saved records, or something else.
 
 Rules
 - Report only what the person says. Never invent a value, and never do arithmetic: ChatReceipt \
@@ -215,14 +235,35 @@ payment_terms, delivery_terms, notes: as named.
 - One message can make several changes ("change the buyer to Emeka, the total to 60k, and mark \
 20k as paid").
 
-Intent
-- correct: the message gives or changes details.
+Intent, when a draft is open
+- correct: the message gives or changes details of the draft.
 - read_again: they want the screenshot read again ("try again", "read it again").
 - show_record: they want to see the whole record.
 - confirm: they want it saved as it is. cancel: they want to stop. new_record: they want to start \
 over with another screenshot. help: they ask how this works.
+Intent, for everything else (with or without a draft)
+- greeting, thanks: hello, or thanks. help: how ChatReceipt works or what it can do.
+- make_receipt: they want a new receipt made and will send screenshots.
+- list_records: their saved records. find_records: particular records, by a person, a reference such \
+as CR-000012, a period or a payment status.
+- money_owed: who still owes money, or how much is outstanding. totals: how much they sold, made or \
+recorded in a period, or how many records they have.
+- resend_receipt: send a saved receipt again. web_link: see their records in a browser.
+- delete_data: delete, clear or wipe their records or data (ChatReceipt asks before deleting).
+- other: anything else, including questions ChatReceipt can't answer, such as checking a bank transfer.
+- With no draft open, never use correct, confirm or cancel: a value they give is about a saved record \
+or a new one, so use find_records, make_receipt or unclear.
 - unclear: you can't tell what they want. Ask one short question in plain words, and make no \
 changes you aren't sure of.
+
+For record requests, person and reference only when the message contains them, copied exactly; \
+period (today, yesterday, this_week, last_week, this_month, last_month, this_year, or any), status \
+(owed for not fully paid, unpaid, partially_paid, paid, or any) and format (pdf, both, otherwise image).
+
+reply: one short sentence that reacts to what they actually said, the way a helpful person would \
+("Got it, the buyer is Emeka.", "Sure, here's who still owes you."). Write in their style: English, \
+Nigerian Pidgin or a mix. Never put an amount, total, date or name in it that they didn't write: \
+ChatReceipt adds the figures itself. Never say a payment is verified. Leave it empty when intent is unclear.
 
 resolved_checks: the numbers of the listed open checks that this message answers. When the person \
 comments on a check ("it was the buyer who said that", "that's fine", "ignore that"), list it here and \
@@ -246,6 +287,12 @@ class AICorrection(BaseModel):
     changes: list[AIChange] = Field(default_factory=list)
     resolved_checks: list[int] = Field(default_factory=list)
     question: str = ""
+    reply: str = ""
+    person: str = ""
+    reference: str = ""
+    period: str = "any"
+    status: str = "any"
+    format: str = "image"
 
 
 def parse_correction(data: Any) -> AICorrection:
@@ -257,19 +304,72 @@ def parse_correction(data: Any) -> AICorrection:
     intent = parsed.intent if parsed.intent in INTENTS else "unclear"
     changes = [change for change in parsed.changes[:20] if change.field in CHANGE_FIELDS]
     question = " ".join(parsed.question.replace("*", "").split())[:300]
-    return parsed.model_copy(update={"intent": intent, "changes": changes, "question": question})
+    reply = " ".join(parsed.reply.replace("*", "").split())[:300]
+    update = {
+        "intent": intent, "changes": changes, "question": question, "reply": reply,
+        "period": parsed.period if parsed.period in PERIODS else "any",
+        "status": parsed.status if parsed.status in RECORD_STATUSES else "any",
+        "format": parsed.format if parsed.format in FORMATS else "image",
+    }
+    return parsed.model_copy(update=update)
+
+
+_FIGURE = re.compile(r"\d[\d,.]*")
+
+
+def safe_reply(reply: str, message: str) -> str:
+    """The AI's reply, if it states no figure the person didn't write and claims no verification.
+
+    Amounts, totals and dates in replies always come from ChatReceipt's own records and calculations, so
+    any figure the model adds is a reason to drop its wording and use a fixed message instead.
+    """
+    reply = reply.strip()
+    if not reply:
+        return ""
+    written = {figure.replace(",", "") for figure in _FIGURE.findall(message)}
+    if any(figure.replace(",", "").rstrip(".") not in written for figure in _FIGURE.findall(reply)):
+        return ""
+    if re.search(r"[₦$£€]", reply) and not re.search(r"[₦$£€]", message):
+        return ""
+    if re.search(r"\bverif", reply, re.IGNORECASE):
+        return ""
+    return reply
 
 
 def correction_request(
-    draft: TransactionDraft,
-    calculation: Calculation,
+    draft: TransactionDraft | None,
+    calculation: Calculation | None,
     *,
     checks: Sequence[str],
     question: str,
     earlier: Sequence[str],
     message: str,
+    today: date | None = None,
 ) -> StructuredRequest:
-    record = {
+    lines = [f"Today is {today:%A, %d %B %Y}.", ""] if today else []
+    if draft is None or calculation is None:
+        lines += ["No receipt draft is open."]
+    else:
+        lines += ["The open draft:", json.dumps(_record(draft, calculation), ensure_ascii=False, indent=1)]
+    if checks:
+        lines += ["", "Open checks:", *[f"{number}. {text}" for number, text in enumerate(checks, start=1)]]
+    if question:
+        lines += ["", f"The last question ChatReceipt asked: {question}"]
+    if earlier:
+        lines += ["", "The conversation so far, oldest first:", *[f"- {text}" for text in earlier]]
+    lines += ["", "The person's latest message:", message]
+    return StructuredRequest(
+        task="whatsapp_correction",
+        system=CORRECTION_PROMPT,
+        parts=[TextPart("\n".join(lines))],
+        schema=CORRECTION_SCHEMA,
+        max_output_tokens=8192,
+        light=True,
+    )
+
+
+def _record(draft: TransactionDraft, calculation: Calculation) -> dict[str, Any]:
+    return {
         "currency": draft.currency,
         "seller": draft.seller,
         "buyer": draft.buyer,
@@ -285,22 +385,6 @@ def correction_request(
         "balance_mentioned": draft.stated_outstanding,
         "calculated_by_chatreceipt": {"total": calculation.total, "paid": calculation.amount_paid, "still_owed": calculation.outstanding},
     }
-    lines = ["The record:", json.dumps(record, ensure_ascii=False, indent=1)]
-    if checks:
-        lines += ["", "Open checks:", *[f"{number}. {text}" for number, text in enumerate(checks, start=1)]]
-    if question:
-        lines += ["", f"The last question ChatReceipt asked: {question}"]
-    if earlier:
-        lines += ["", "The person's earlier messages about this record, oldest first:", *[f"- {text}" for text in earlier]]
-    lines += ["", "The person's latest message:", message]
-    return StructuredRequest(
-        task="whatsapp_correction",
-        system=CORRECTION_PROMPT,
-        parts=[TextPart("\n".join(lines))],
-        schema=CORRECTION_SCHEMA,
-        max_output_tokens=8192,
-        light=True,
-    )
 
 
 # -- Applying the changes ----------------------------------------------------------------------
@@ -487,14 +571,16 @@ def apply_changes(draft: TransactionDraft, changes: Sequence[AIChange], *, today
 
 async def understand(
     model: Any,
-    draft: TransactionDraft,
+    draft: TransactionDraft | None,
     *,
     checks: Sequence[str],
     question: str,
     earlier: Sequence[str],
     message: str,
+    today: date | None = None,
 ) -> AICorrection:
-    """Ask the AI provider what the message changes. Raises AIProviderError when it can't say."""
-    request = correction_request(draft, calculate(draft), checks=checks, question=question, earlier=earlier, message=message)
+    """Ask the AI provider what the message means here. Raises AIProviderError when it can't say."""
+    calculation = calculate(draft) if draft is not None else None
+    request = correction_request(draft, calculation, checks=checks, question=question, earlier=earlier, message=message, today=today)
     response = await model.generate(request)
     return parse_correction(response.data)

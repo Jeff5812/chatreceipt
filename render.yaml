@@ -52,3 +52,7 @@ services:
         value: v26.0
       - key: WHATSAPP_TIMEZONE
         value: Africa/Lagos
+      # The free plan has no background workers, so the WhatsApp worker runs inside the API.
+      # Only one copy may run against the database: turn it off here while another machine runs it.
+      - key: WHATSAPP_WORKER_IN_PROCESS
+        value: "true"

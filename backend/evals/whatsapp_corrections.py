@@ -1,11 +1,13 @@
 """Check how the real AI reads typed WhatsApp corrections.
 
-usage (from backend/): python -m evals.whatsapp_corrections [--delay SECONDS]
+usage (from backend/): python -m evals.whatsapp_corrections [--delay SECONDS] [--only NAME,NAME]
 
 Each case is a draft, the question ChatReceipt last asked, and what the person typed, taken from the
 first real phone test and the corrections people commonly send. The AI's answer goes through the same
 parsing as the live channel, and a case passes when it reports every expected change and the right
-intent. It calls the configured AI provider and uses quota (one request per case).
+intent. Request cases have no draft open: a question about saved records, or something else, passes
+when the intent and the search filters are right. It calls the configured AI provider and uses quota
+(one request per case), so ``--only`` runs just the named cases.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import argparse
 import asyncio
 import sys
 import time
+from datetime import date
 from typing import Any
 
 from app.calculations import calculate
@@ -60,6 +63,16 @@ CASES: list[tuple[str, dict[str, Any], str, list[str], str, str, list[tuple[str,
     ("show everything", TRANSFER, CONFIRM, [], "show me the whole record", "show_record", []),
 ]
 
+# With no draft open: (name, earlier lines, message, accepted intents "a|b", expected filters).
+# A filter value is matched as a case-insensitive part of what the AI reported.
+REQUESTS: list[tuple[str, list[str], str, str, dict[str, str]]] = [
+    ("still owing", [], "any of my customers still owing me money?", "money_owed", {}),
+    ("resend by name", [], "abeg send me Ada's receipt again", "resend_receipt", {"person": "ada"}),
+    ("sales last month", [], "what did I sell last month", "totals|find_records", {"period": "last_month"}),
+    ("bank check", [], "can you check if Tunde's transfer has entered my account?", "other", {}),
+    ("make one", [], "I want to make a receipt for my customer", "make_receipt", {}),
+]
+
 
 def _matches(change: Any, field: str, value: str) -> bool:
     if change.field not in field.split("|"):
@@ -72,17 +85,19 @@ def _matches(change: Any, field: str, value: str) -> bool:
     return value.lower() in change.value.lower()
 
 
-async def run(delay: float) -> int:
+async def run(delay: float, only: set[str] | None = None) -> int:
     settings = get_settings()
     model = create_provider(settings)
     if not model.configured:
         print("No AI provider is configured.")
         return 2
+    cases = [case for case in CASES if only is None or case[0] in only]
+    requests = [case for case in REQUESTS if only is None or case[0] in only]
     used = (settings.gemini_light_model or settings.gemini_model) if model.name == "gemini" else settings.extraction_model
-    print(f"Checking {len(CASES)} typed corrections with {model.name} ({used})\n")
+    print(f"Checking {len(cases)} typed corrections and {len(requests)} requests with {model.name} ({used})\n")
     passed = 0
     try:
-        for name, values, question, earlier, message, intent, expected in CASES:
+        for name, values, question, earlier, message, intent, expected in cases:
             draft = TransactionDraft.model_validate(values)
             calculate(draft)
             started = time.perf_counter()
@@ -100,17 +115,41 @@ async def run(delay: float) -> int:
             for problem in problems:
                 print(f"        - {problem}")
             await asyncio.sleep(delay)
+        for name, earlier, message, intents, filters in requests:
+            started = time.perf_counter()
+            try:
+                answer = await understand(model, None, checks=[], question="", earlier=earlier, message=message, today=date.today())
+            except AIProviderError as exc:
+                print(f"FAIL  {name:24} provider error: {exc.kind.value}")
+                continue
+            seconds = time.perf_counter() - started
+            problems = [] if answer.intent in intents.split("|") else [f"intent {answer.intent}, expected {intents}"]
+            problems += [
+                f"{key} {getattr(answer, key)!r}, expected {value!r}"
+                for key, value in filters.items()
+                if value.lower() not in str(getattr(answer, key)).lower()
+            ]
+            passed += not problems
+            found = ", ".join(f"{key}={getattr(answer, key)}" for key in ("person", "reference", "period", "status") if getattr(answer, key) not in ("", "any"))
+            print(f"{'PASS' if not problems else 'FAIL'}  {name:24} {seconds:4.1f}s  {message!r}\n        -> {answer.intent}: {found or 'no filters'}  reply: {answer.reply!r}")
+            for problem in problems:
+                print(f"        - {problem}")
+            await asyncio.sleep(delay)
     finally:
         await model.aclose()
-    print(f"\n{passed}/{len(CASES)} corrections understood")
-    return 0 if passed == len(CASES) else 1
+    total = len(cases) + len(requests)
+    print(f"\n{passed}/{total} understood")
+    return 0 if passed == total else 1
 
 
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--delay", type=float, default=2.0, help="Seconds between requests, to stay under rate limits.")
-    raise SystemExit(asyncio.run(run(parser.parse_args().delay)))
+    parser.add_argument("--only", default="", help="Comma-separated case names to run, to save quota.")
+    arguments = parser.parse_args()
+    only = {name.strip() for name in arguments.only.split(",") if name.strip()} or None
+    raise SystemExit(asyncio.run(run(arguments.delay, only)))
 
 
 if __name__ == "__main__":
