@@ -1,12 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { downloadDocument, isAbortError, messageOf, previewDocument } from "@/lib/api";
+import { canShareFiles, downloadDocument, fetchDocument, isAbortError, messageOf, previewDocument, shareFile } from "@/lib/api";
 import { cheer } from "@/lib/chit";
 import type { ClientStats, TransactionDraft } from "@/lib/types";
 import { Celebration } from "../critters";
 import { Button } from "../ui/button";
-import { ArrowLeftIcon, DownloadIcon } from "../ui/icons";
+import { ArrowLeftIcon, ArrowRightIcon, DownloadIcon } from "../ui/icons";
 import { PixelCheck } from "../ui/pixel-check";
 import { PixelSpinner } from "../ui/pixel-spinner";
 import { Notice } from "./notice";
@@ -58,6 +58,12 @@ export function PreviewStep({
   const [downloaded, setDownloaded] = useState<Format | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [frameHeight, setFrameHeight] = useState(960);
+  // Sharing straight into WhatsApp from the phone's share sheet, where the browser supports it. This step
+  // only ever renders in the browser (it follows the upload and review steps), so it can ask at once.
+  const [canShare] = useState(canShareFiles);
+  const [sharing, setSharing] = useState(false);
+  // The image, kept when the browser wanted a fresh tap before opening the share sheet.
+  const [readyToShare, setReadyToShare] = useState<File | null>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const settle = useRef(0);
 
@@ -105,6 +111,30 @@ export function PreviewStep({
       cheer("worried", 2400);
     } finally {
       setExporting(null);
+    }
+  }
+
+  async function share() {
+    if (sharing || exporting !== null) return;
+    setSharing(true);
+    setExportError(null);
+    try {
+      const file = readyToShare ?? (await fetchDocument(draft, "png", stats));
+      try {
+        await shareFile(file, "Transaction record");
+        setReadyToShare(null);
+      } catch (reason) {
+        if (reason instanceof DOMException && reason.name === "NotAllowedError") {
+          setReadyToShare(file); // Safari wants a fresh tap after the wait: the next tap opens the sheet
+          return;
+        }
+        throw reason;
+      }
+    } catch (reason) {
+      setExportError(messageOf(reason));
+      cheer("worried", 2400);
+    } finally {
+      setSharing(false);
     }
   }
 
@@ -205,6 +235,18 @@ export function PreviewStep({
             >
               {label("png", "Download image (PNG)", "Printing the image…")}
             </Button>
+            {canShare && (
+              <Button
+                variant="secondary"
+                className="w-full"
+                disabled={html === null || exporting !== null}
+                aria-busy={sharing}
+                onClick={share}
+              >
+                {sharing ? <PixelSpinner className="size-4" /> : <ArrowRightIcon />}
+                {sharing ? "Printing the image…" : readyToShare ? "Tap again to share" : "Share the image"}
+              </Button>
+            )}
             <p aria-live="polite" className="sr-only">
               {downloaded ? `The ${downloaded.toUpperCase()} has downloaded.` : ""}
             </p>

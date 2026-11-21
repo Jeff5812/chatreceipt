@@ -160,54 +160,85 @@ def describe(request: Request) -> str:
     return " ".join(parts)
 
 
-def _other_party(row: Mapping[str, Any]) -> str:
+def other_party(row: Mapping[str, Any], unnamed: str = "Someone") -> str:
     """The person on the other side of a record from the customer, when their side is known."""
     role = row.get("owner_role")
     if role == "seller":
-        return row["buyer"] or "Someone"
+        return row["buyer"] or unnamed
     if role == "buyer":
-        return row["seller"] or "Someone"
-    return row["buyer"] or row["seller"] or "Someone"
+        return row["seller"] or unnamed
+    return row["buyer"] or row["seller"] or unnamed
 
 
-def _owed_lines(rows: Sequence[Mapping[str, Any]], title: str, total_label: str) -> list[str]:
+def _owed_lines(rows: Sequence[Mapping[str, Any]], title: str, total_label: str, *, column: str = "outstanding") -> list[str]:
     lines = [title.replace("  ", " ").replace(" *", "*")]
     totals: dict[str, Decimal] = defaultdict(Decimal)
     for row in rows:
         currency = get_currency(row["currency"])
-        lines.append(f"• {_other_party(row)}: {money(row['outstanding'], currency)} ({row['reference']})")
-        totals[row["currency"]] += Decimal(row["outstanding"])
+        lines.append(f"• {other_party(row)}: {money(row[column], currency)} ({row['reference']})")
+        totals[row["currency"]] += Decimal(row[column])
     lines.append("")
     lines.append(f"{total_label}: " + ", ".join(money(amount, get_currency(code)) for code, amount in totals.items()))
     return lines
 
 
-def owed_text(rows: Sequence[Mapping[str, Any]], heading: str) -> str:
-    """Who still owes what, from records with an outstanding amount.
+def _amount(row: Mapping[str, Any], column: str) -> Decimal:
+    return Decimal(row[column] or 0)
 
-    Records where the customer was the buyer are money they owe, so they're listed on their own.
+
+def owed_text(rows: Sequence[Mapping[str, Any]], heading: str) -> str:
+    """Who still owes what, from records with an outstanding amount or a payment that hasn't arrived.
+
+    Records where the customer was the buyer are money they owe, so they're listed on their own. A
+    payment the chat recorded counts as paid in the balance, but if the customer said it hasn't
+    reached their account, or hasn't checked yet, it's listed too: a claim isn't money.
     """
-    owed_to_them = [row for row in rows if row.get("owner_role") != "buyer"]
-    they_owe = [row for row in rows if row.get("owner_role") == "buyer"]
+    sales = [row for row in rows if row.get("owner_role") != "buyer"]
+    owed_to_them = [row for row in sales if _amount(row, "outstanding") > 0]
+    missing = [row for row in sales if row.get("payment_check") == "not_received" and _amount(row, "amount_paid") > 0]
+    unchecked = [row for row in sales if row.get("payment_check") == "claimed" and _amount(row, "amount_paid") > 0]
+    they_owe = [row for row in rows if row.get("owner_role") == "buyer" and _amount(row, "outstanding") > 0]
+    groups = [
+        (owed_to_them, f"*Still owed {heading}*", "Total still owed", "outstanding"),
+        (missing, "*Paid in the chat, but not in your account yet*", "Total not received", "amount_paid"),
+        (unchecked, "*Payments you haven't checked yet*", "Total to check", "amount_paid"),
+        (they_owe, f"*You still owe {heading}*", "Total you owe", "outstanding"),
+    ]
     lines: list[str] = []
-    if owed_to_them:
-        lines += _owed_lines(owed_to_them, f"*Still owed {heading}*", "Total still owed")
-    if they_owe:
-        lines += [""] if lines else []
-        lines += _owed_lines(they_owe, f"*You still owe {heading}*", "Total you owe")
+    for group, title, total_label, column in groups:
+        if group:
+            lines += [""] if lines else []
+            lines += _owed_lines(group, title, total_label, column=column)
     return "\n".join(lines)
 
 
-def totals_text(rows: Sequence[Mapping[str, Any]], heading: str) -> str:
-    """Agreed, paid and still owed, per currency, for the records found."""
+def _sums(rows: Sequence[Mapping[str, Any]]) -> dict[str, list[Decimal]]:
     by_currency: dict[str, list[Decimal]] = defaultdict(lambda: [Decimal(0), Decimal(0), Decimal(0)])
     for row in rows:
         sums = by_currency[row["currency"]]
         for index, column in enumerate(("total", "amount_paid", "outstanding")):
             sums[index] += Decimal(row[column] or 0)
+    return by_currency
+
+
+def totals_text(rows: Sequence[Mapping[str, Any]], heading: str) -> str:
+    """Agreed, paid and still owed, per currency, for the records found.
+
+    Purchases (records where the customer was the buyer) get their own line, so what they owe is never
+    added to what they're owed.
+    """
     count = len(rows)
     lines = [f"*Your records {heading}*".replace("  ", " ").replace(" *", "*") + f" · {count} record{'s' if count != 1 else ''}"]
-    for code, (total, paid, owed) in by_currency.items():
+    sales = [row for row in rows if row.get("owner_role") != "buyer"]
+    purchases = [row for row in rows if row.get("owner_role") == "buyer"]
+    for code, (total, paid, owed) in _sums(sales).items():
         currency = get_currency(code)
         lines.append(f"Agreed {money(total, currency)} · paid {money(paid, currency)} · still owed {money(owed, currency)}")
+    for code, (total, paid, owed) in _sums(purchases).items():
+        currency = get_currency(code)
+        bought = len(purchases)
+        lines.append(
+            f"As the buyer ({bought} record{'s' if bought != 1 else ''}): agreed {money(total, currency)} · "
+            f"paid {money(paid, currency)} · you still owe {money(owed, currency)}"
+        )
     return "\n".join(lines)

@@ -37,6 +37,8 @@ against the real AI.
 | Someone pays for the buyer (a sister, an employer) | Recorded as payer, shown as *Paid by*; the buyer stays as the chat shows | `test_chat_export_api.py`, `test_whatsapp_identity.py` |
 | A name mentioned inside a message ("Ada's order") | Belongs to the person mentioned, not the sender (an AI rule; checked in the evaluation) | `evals/cases.json` |
 | The customer was the buyer on a record | "Who still owes me?" lists it as money they owe, not money owed to them | `test_whatsapp_identity.py`, `test_parties.py` |
+| Someone hides their number behind a WhatsApp username | Identified by Meta's user ID as before, answered by it, and their username is kept for display only | `test_whatsapp_trust.py` |
+| The other person shows as "@ada_closet" in a chat | Recognised by that username on the next receipt, like a phone number; a username is never moved to someone with a different number | `test_whatsapp_trust.py` |
 
 ## Payments
 
@@ -51,6 +53,8 @@ against the real AI.
 | "Received your payment" before any price appears | Payment flagged: the messages are probably out of order | `test_negotiation_rules.py` |
 | Refund | Refunded | Evaluation case `cancel-05` (no unit test yet) |
 | Text in the chat telling the AI to mark it paid or approve it | Ignored, and the record is flagged | `test_engine_security.py`, `test_extraction.py` |
+| The chat says money was paid to the customer | Saved as a claim, and *Saved* asks whether it reached their account; "Not yet" lists it as not in their account yet until they say it arrived | `test_whatsapp_trust.py` |
+| The same transfer receipt reference on a second record | Pointed out under *Please check* as a possible sign of a fake transfer; never called fake | `test_whatsapp_trust.py` |
 
 ## Figures
 
@@ -77,6 +81,8 @@ against the real AI.
 | A group chat export | Read, but its name never decides who the owner is | `test_chat_import.py` |
 | An export without the usual file name | The owner stays unknown unless the customer's own name matches one sender, and no name is placed by role | `test_chat_import.py`, `test_chat_export_api.py` |
 | A screenshot sent while a chat export is read, or onto its draft | Never mixed in; the customer chooses a new record or keeps the draft | `test_whatsapp_identity.py` |
+| The AI copies the export transcript's keys ("[m3] p1 · 10:41 ·", "p2") into quotes, notes or names | Turned back into the message's words, people's names and "the message at 10:41" | `test_chat_export_api.py` |
+| The AI reports a total or balance the chat never states as a doubt | Dropped: ChatReceipt adds totals up. Doubts that quote figures are kept | `test_parties.py` |
 | "Today" or "Yesterday" in a screenshot | Resolved against when it was sent, in the customer's time zone | `test_extraction.py`, `test_whatsapp_understanding.py` |
 
 ## Records, review and receipts
@@ -91,6 +97,8 @@ against the real AI.
 | A worker crashes mid-job | Another worker takes over; the late result is discarded | `test_engine_pipeline.py` |
 | The AI is down or answers in the wrong shape | Retried with backoff, then the record fails with a reason and can be retried or entered by hand | `test_engine_pipeline.py`, `test_gemini_provider.py` |
 | PDF rendering fails | Retried, then reported | `test_engine_pipeline.py`, `test_documents.py` |
+| The other person opens a receipt's confirmation link | They see that one record and confirm it or say what's wrong; the owner is told and the record shows the answer | `test_whatsapp_trust.py` |
+| A disputed record | The note goes to the owner; the record stays as saved, and a new one is saved to fix it | `test_whatsapp_trust.py` |
 
 ## Security and privacy
 
@@ -106,6 +114,8 @@ against the real AI.
 | A ZIP with `../` paths, a drive letter, a password, thousands of files or a huge compression ratio | Refused before anything is extracted; nothing is written to disk | `test_chat_import.py`, `test_chat_export_api.py`, `test_whatsapp_identity.py` |
 | A document file name with a path in it | Only the base name is kept | `test_parties.py` |
 | "Clear history" | The open draft, closed drafts and the remembered conversation are emptied; saved records stay | `test_whatsapp_identity.py` |
+| A wrong or guessed confirmation code | "I couldn't find that record"; codes carry about 50 random bits and show one record | `test_whatsapp_trust.py` |
+| Someone who confirmed a record deletes their data | Their answer stays on the owner's record without their name, number or username | `test_whatsapp_trust.py` |
 | A visitor forging `X-Forwarded-For` to dodge rate limits | Ignored behind a proxy | `test_client_address.py` |
 | Errors and logs | No conversation text, phone numbers or query strings | `test_engine_security.py`, `test_whatsapp_units.py` |
 | A customer asks to delete their data | Everything for that customer is erased | `test_engine_security.py`, `test_whatsapp_flow.py` |

@@ -16,6 +16,21 @@ export interface RecordSummary {
   outstanding: string | null;
   payment_status: PaymentStatus;
   created_at: string;
+  // The side the customer was on, when it was known.
+  owner_role?: "seller" | "buyer" | null;
+  // Whether money recorded as paid reached the customer, in their own words. Never a verification.
+  payment_check?: "claimed" | "received" | "not_received" | null;
+  // The other person's latest answer to the record's confirmation link.
+  response?: "agreed" | "disputed" | null;
+}
+
+export interface RecordResponse {
+  response: "agreed" | "disputed";
+  note: string | null;
+  name: string | null;
+  // Their number with a "+", or their WhatsApp username with an "@".
+  contact: string | null;
+  created_at: string;
 }
 
 export interface RecordList {
@@ -26,6 +41,7 @@ export interface RecordList {
 export interface RecordDetail extends RecordSummary {
   draft: TransactionDraft;
   calculation: Calculation;
+  responses?: RecordResponse[];
 }
 
 const SESSION_KEY = "chatreceipt.records.session";

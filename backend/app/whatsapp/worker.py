@@ -57,6 +57,8 @@ _TYPING_EVERY_SECONDS = 20.0
 _SEND_HOLD_SECONDS = 120.0
 _MAINTENANCE_SECONDS = 3600.0
 _APOLOGY = "Sorry, something went wrong with that message. Please send it again."
+# Incoming kinds that start a reading, so WhatsApp's typing indicator is shown as soon as they're handled.
+_READ_KINDS = frozenset({"image", "document"})
 
 
 class WhatsAppWorker:
@@ -76,13 +78,15 @@ class WhatsAppWorker:
 
     # -- one unit of work each; True means there may be more -----------------------------------
 
-    def _handle_inbound_now(self) -> bool:
+    def _handle_inbound_now(self) -> tuple[bool, str]:
+        """Handle the next stored message. Returns whether there was one, and a message to show typing for."""
         failed: Row | None = None
+        typing_for = ""
         try:
             with self._db.transaction() as conn:
                 row = store.claim_inbound(conn)
                 if row is None:
-                    return False
+                    return False, ""
                 try:
                     postpone = handle_inbound(conn, self._settings, row, understanding=self._understands)
                 except Exception:
@@ -92,7 +96,9 @@ class WhatsAppWorker:
                     store.postpone_inbound(conn, row["message_id"], seconds=postpone)
                 else:
                     store.finish_inbound(conn, row["message_id"])
-            return True
+                    if row["kind"] in _READ_KINDS:
+                        typing_for = row["message_id"]
+            return True, typing_for
         except DatabaseUnavailable:
             raise
         except Exception as exc:
@@ -100,7 +106,7 @@ class WhatsAppWorker:
                 raise
             logger.error("WhatsApp message handling failed (%s)", type(exc).__name__)
             self._record_inbound_failure(failed)
-            return True
+            return True, ""
 
     def _record_inbound_failure(self, row: Row) -> None:
         attempts = row["attempts"] + 1
@@ -114,7 +120,12 @@ class WhatsAppWorker:
         log_event("whatsapp.inbound_failed", attempts=attempts, gave_up=give_up, kind=row["kind"])
 
     async def handle_next_inbound(self) -> bool:
-        return await asyncio.to_thread(self._handle_inbound_now)
+        worked, typing_for = await asyncio.to_thread(self._handle_inbound_now)
+        if typing_for:
+            # A screenshot or chat export arrived: show it's being worked on straight away, at no cost,
+            # instead of a "reading it now" message (see Turn.start_submission).
+            await self._client.show_typing(typing_for)
+        return worked
 
     def _claim_submission(self) -> Row | None:
         with self._db.transaction() as conn:

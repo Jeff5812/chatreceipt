@@ -56,7 +56,33 @@ intelligence", and finished after that session ran out of usage part-way through
   - the webhook refuses a wrong verify token (403) and a forged signature (401), and accepts a signed delivery (200)
   - on the live website, a chat export was read end to end: the seller from the file name, "You" on the buyer, the sister shown as payer, and ₦25,000 / ₦10,000 / ₦15,000 added up by the backend
   - **still to do:** a real chat export sent from a phone to the WhatsApp number
-- **Known cosmetic issue:** evidence quotes from an export can keep the transcript's prefix ("[m1] p1 · 10:38 · …").
+- **Small fixes after the deploy** (a sweep for glitches like the first one found in production):
+  - export evidence and notes no longer show the transcript's keys: quotes lose "[m1] p1 · 10:38 ·", notes name people and say "the message at 10:41" instead of p1 and m3
+  - "the total isn't stated" is no longer listed as something to check, since ChatReceipt adds totals up (doubts that quote figures are kept)
+  - WhatsApp says "chat export", not "screenshot", while one is read or re-read, and in the limit and "draft gone" replies
+  - "how much did I sell?" keeps purchases on their own line; the resend list names the other person, not the customer
+  - a file that can't be read gets no "Try again" button, since reading it again can't help
+  - their own export name is marked *(you)*; "Paid by" never names the customer; the deal hint matches the number of deals; help gives the iPhone steps too
+  - 764 backend tests pass
+- **After the strategy review** (built and tested, not deployed yet; migration 0006 not applied to production):
+  - **Payment checks.**
+    - Money a saved record says was paid to the customer is a claim until they say it arrived: *Saved* asks, with *Yes, it's arrived* and *Not yet*.
+    - "Who still owes me?" lists payments not in their account yet, and unchecked ones.
+    - A transfer receipt's reference already on another record is pointed out as a possible fake transfer.
+  - **The other person's confirmation.**
+    - Each receipt carries a wa.me link (`WHATSAPP_DISPLAY_NUMBER`); the other person sees that one record and confirms it or says what's wrong.
+    - The owner is told, and `recent` and the records page show it.
+    - Their answer stays on the record if they later delete their data, without who gave it.
+  - **Usernames.**
+    - People without a number are answered by their user ID, and their username is kept for display.
+    - `@usernames` in chats recognise contacts like phone numbers do.
+    - User ID changes are followed.
+  - **Fewer paid messages.** No "reading it now" for customers who've saved a record (the free typing indicator shows instead), and the payment question rides on *Saved*: 3 replies per returning receipt instead of 4.
+  - **Website.**
+    - It can be added to an iPhone or Android home screen (manifest, icons, iPhone app settings).
+    - A *Share the image* button opens the phone's share sheet, so a receipt goes straight into WhatsApp.
+    - The records page shows payment checks and the other person's answers.
+  - **Tests:** 785 backend tests pass (21 new in `test_whatsapp_trust.py`). The frontend type check, lint and build are clean.
 
 ## Done on 2026-11-20
 
@@ -139,6 +165,9 @@ intelligence", and finished after that session ran out of usage part-way through
 ## Next
 
 1. **Send "hi" and a screenshot from a real phone** to the hosted WhatsApp channel; it has only been checked with signed test requests since the move to Render.
+1a. **Match claimed payments against bank statements** (the third step of the payment checks): the customer
+   sends an OPay, Moniepoint, PalmPay or bank statement, and claims are matched by amount, time and sender
+   name. Needs a few real (redacted) statements to build and test the readers against.
 2. **Next round of rules, developed on the development split:**
    - payment terms ("pay on delivery") as a sign of "unpaid"
    - decreasing timestamps as out-of-order messages

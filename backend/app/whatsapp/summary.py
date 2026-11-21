@@ -207,7 +207,9 @@ def _other_deals(review: Mapping[str, Any]) -> list[str]:
     lines = ["", "*Other deals in this chat*"]
     lines += [f"{number}. {deal[:120]}{' _(this record)_' if deal == focus else ''}" for number, deal in enumerate(deals, start=1)]
     if review.get("source") == "chat_export":
-        lines.append("Send *deal 1* (or 2, 3) for a receipt of one of them.")
+        choices = [f"*deal {number}*" for number in range(1, len(deals) + 1)]
+        said = choices[0] if len(choices) == 1 else f"{', '.join(choices[:-1])} or {choices[-1]}"
+        lines.append(f"Send {said} for a receipt of {'it' if len(deals) == 1 else 'one of them'}.")
     else:
         lines.append("For a receipt of one of them, send only its screenshots.")
     return lines
@@ -414,22 +416,95 @@ def current_question(draft: TransactionDraft, pending_target: str = "") -> str:
     return question.replace("*", "")
 
 
-def receipt_caption(reference: str, draft: TransactionDraft) -> str:
-    """The words under the receipt image, which stay with it when it's forwarded."""
+def receipt_caption(reference: str, draft: TransactionDraft, *, confirm_link: str = "", other_name: str = "") -> str:
+    """The words under the receipt image, which stay with it when it's forwarded.
+
+    With a confirmation link, the person it's forwarded to can confirm the record in one tap.
+    """
     calculation = calculate(draft)
     currency = get_currency(draft.currency)
+    confirm = ""
+    if confirm_link:
+        question = f"{other_name[:60]}, is this right?" if other_name else "Is this right?"
+        confirm = f"✅ *{question}* Tap to confirm it:\n{confirm_link}\n\n"
     return (
         f"🧾 *Receipt {reference}*\n\n"
         f"*Total:* {money(calculation.total, currency)}\n"
         f"*Paid:* {money(calculation.amount_paid, currency)}\n"
         f"*Remaining:* {money(calculation.outstanding, currency)}\n"
         f"{payment_line(draft.payment_status)}\n\n"
+        f"{confirm}"
         f"{NOT_VERIFIED}"
     )
 
 
-def saved_text(reference: str) -> str:
+def saved_text(reference: str, *, other_name: str = "", confirm_link: bool = False) -> str:
+    if confirm_link:
+        who = other_name[:60] or "the other person"
+        return (
+            f"✅ Saved as *{reference}*.\n\nForward the receipt above to {who}. They can confirm it with one tap, "
+            "and I'll tell you when they do."
+        )
     return f"✅ Saved as *{reference}*.\n\nForward the receipt above to the other person, or tap *Get PDF* for a copy you can print."
+
+
+def payment_question(amount: str, other_name: str) -> str:
+    """Asked when a saved record says money was paid to the customer: the chat's word isn't the money."""
+    source = f" from {other_name[:60]}" if other_name else ""
+    return (
+        f"💰 *Has {amount}{source} reached your account?*\n"
+        "The chat says it was paid. Check your bank app before you hand anything over."
+    )
+
+
+def record_marks(row: Mapping[str, Any]) -> str:
+    """Whether the other person confirmed a saved record, and whether its payment arrived."""
+    marks: list[str] = []
+    if row.get("response") == "agreed":
+        marks.append("✅ confirmed by them")
+    elif row.get("response") == "disputed":
+        marks.append("⚠️ disputed")
+    check = row.get("payment_check")
+    if check == "not_received":
+        marks.append("💰 not in your account yet")
+    elif check == "claimed":
+        marks.append("💰 payment not checked")
+    elif check == "received":
+        marks.append("💰 received")
+    return " · ".join(marks)
+
+
+def responder_view(record: Mapping[str, Any], owner: str, *, first_contact: bool) -> str:
+    """A record as the other person sees it when they open its confirmation link: only this record."""
+    draft = TransactionDraft.model_validate(record["draft"])
+    calculation = calculate(draft)
+    currency = get_currency(draft.currency)
+    owner = owner[:60]
+    intro = (
+        f"Hi 👋 I'm *ChatReceipt*. *{owner}* saved a record of a deal with you and asked you to check it."
+        if first_contact
+        else f"*{owner}* asked you to check this record of your deal with them."
+    )
+    when = f" · {format_date(record['transaction_date'])}" if record.get("transaction_date") else ""
+    lines = [intro, "", f"🧾 *{record['reference']}*{when}"]
+    lines += [f"*{side.capitalize()}:* {getattr(draft, side).strip()[:80]}" for side in ("seller", "buyer") if getattr(draft, side).strip()]
+    items = [row.description.strip()[:60] for row in draft.line_items if row.description.strip()]
+    if items:
+        lines.append(f"*For:* {', '.join(items[:3])}{', …' if len(items) > 3 else ''}")
+    lines += [
+        "",
+        amount_table([
+            ("Total", money(calculation.total, currency)),
+            ("Paid", money(calculation.amount_paid, currency)),
+            ("Remaining", money(calculation.outstanding, currency)),
+        ]),
+    ]
+    if draft.due_date:
+        lines.append(f"*Due:* {readable_date(draft.due_date)}")
+    if draft.delivery_terms.strip():
+        lines.append(f"*Delivery:* {draft.delivery_terms.strip()[:150]}")
+    lines += ["", "*Is this right?*", "_Your answer goes to them with your WhatsApp name and number. ChatReceipt doesn't verify payments._"]
+    return "\n".join(lines)
 
 
 def recent_text(rows: Sequence[Mapping[str, Any]]) -> str:
@@ -444,4 +519,7 @@ def recent_text(rows: Sequence[Mapping[str, Any]]) -> str:
         if people:
             lines.append(f"    {people}")
         lines.append(f"    {money(row['total'], currency)} · {status}")
+        marks = record_marks(row)
+        if marks:
+            lines.append(f"    {marks}")
     return "\n".join(lines)

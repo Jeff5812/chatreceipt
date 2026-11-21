@@ -122,8 +122,19 @@ def mark_welcomed(conn: Connection, customer_id: UUID) -> None:
 
 
 def delete_customer_data(conn: Connection, customer_id: UUID) -> None:
-    """Delete everything the customer has. Their stored files are removed by the worker straight after."""
+    """Delete everything the customer has. Their stored files are removed by the worker straight after.
+
+    Their answers to other people's records stay on those records, without who gave them.
+    """
     conn.execute("INSERT INTO chatreceipt.storage_erasures (customer_ref) VALUES (%s) ON CONFLICT DO NOTHING", (customer_id,))
+    conn.execute(
+        """
+        UPDATE chatreceipt.record_responses
+        SET responder_phone = NULL, responder_username = NULL, responder_name = NULL
+        WHERE responder_id = %s
+        """,
+        (customer_id,),
+    )
     conn.execute("DELETE FROM chatreceipt.whatsapp_outbound WHERE customer_ref = %s", (customer_id,))
     conn.execute("DELETE FROM chatreceipt.customers WHERE id = %s", (customer_id,))
 
@@ -137,6 +148,15 @@ def note_whatsapp_name(conn: Connection, customer_id: UUID, name: str) -> None:
         conn.execute(
             "UPDATE chatreceipt.customers SET whatsapp_name = %s WHERE id = %s AND whatsapp_name IS DISTINCT FROM %s",
             (name, customer_id, name),
+        )
+
+
+def note_whatsapp_username(conn: Connection, customer_id: UUID, username: str) -> None:
+    """Keep the latest WhatsApp username, for people who have one. Shown only, never an identity."""
+    if username:
+        conn.execute(
+            "UPDATE chatreceipt.customers SET whatsapp_username = %s WHERE id = %s AND whatsapp_username IS DISTINCT FROM %s",
+            (username, customer_id, username),
         )
 
 
@@ -170,11 +190,12 @@ def owner_names(conn: Connection, customer_id: UUID) -> list[str]:
 # -- The people a customer deals with --------------------------------------------------------------
 
 
-def find_counterparty(conn: Connection, customer_id: UUID, *, phone: str, label: str) -> tuple[Row, str] | None:
+def find_counterparty(conn: Connection, customer_id: UUID, *, phone: str, label: str, username: str = "") -> tuple[Row, str] | None:
     """Someone this customer confirmed on an earlier receipt, and how they were matched.
 
-    A phone number is a reliable match ("phone"). A label is only the customer's own name for a
-    contact ("label"): it is used when exactly one person has it, and only as a suggestion.
+    A phone number ("phone") or a WhatsApp username ("username") is a reliable match. A label is
+    only the customer's own name for a contact ("label"): it is used when exactly one person has
+    it, and only as a suggestion.
     """
     if phone:
         row = conn.execute(
@@ -182,6 +203,12 @@ def find_counterparty(conn: Connection, customer_id: UUID, *, phone: str, label:
         ).fetchone()
         if row:
             return row, "phone"
+    if username:
+        row = conn.execute(
+            "SELECT * FROM chatreceipt.counterparties WHERE customer_id = %s AND username = %s", (customer_id, username.lower())
+        ).fetchone()
+        if row:
+            return row, "username"
     key = name_key(label)
     if not key:
         return None
@@ -193,29 +220,82 @@ def find_counterparty(conn: Connection, customer_id: UUID, *, phone: str, label:
 
 
 def remember_counterparty(
-    conn: Connection, customer_id: UUID, *, name: str, phone: str, label: str, role: str, counterparty_id: UUID | None = None
+    conn: Connection,
+    customer_id: UUID,
+    *,
+    name: str,
+    phone: str,
+    label: str,
+    role: str,
+    counterparty_id: UUID | None = None,
+    username: str = "",
 ) -> None:
     """After a receipt is saved: the other person's name as the customer confirmed it.
 
-    By phone number when there is one. Otherwise only with a label to recognise them by, and never
-    by merging two people who merely have the same name.
+    By phone number or WhatsApp username when there is one. Otherwise only with a label to recognise
+    them by, and never by merging two people who merely have the same name. A username already
+    remembered for someone with a different number is left with them, never moved.
     """
     key = name_key(label)
     labels = [key] if key else []
     last_role = role if role in ("seller", "buyer") else None
+    username = username.lower()
+    if username:
+        holder = conn.execute(
+            "SELECT id, phone FROM chatreceipt.counterparties WHERE customer_id = %s AND username = %s", (customer_id, username)
+        ).fetchone()
+        if holder is not None and (not phone or holder["phone"] in (None, phone)):
+            # The username recognises them: their entry gets the confirmed name, and their number if
+            # the chat showed it and nobody else is remembered with it.
+            conn.execute(
+                """
+                UPDATE chatreceipt.counterparties c
+                SET name = %s,
+                    phone = CASE WHEN c.phone IS NULL AND %s <> '' AND NOT EXISTS (
+                        SELECT 1 FROM chatreceipt.counterparties o WHERE o.customer_id = c.customer_id AND o.phone = %s
+                    ) THEN %s ELSE c.phone END,
+                    labels = ARRAY(SELECT DISTINCT entry FROM unnest(c.labels || %s::text[]) AS entry LIMIT 10),
+                    last_role = COALESCE(%s, c.last_role), receipts = c.receipts + 1, last_seen_at = now()
+                WHERE c.id = %s
+                """,
+                (name, phone, phone, phone, labels, last_role, holder["id"]),
+            )
+            return
+        if holder is not None:
+            username = ""  # someone else's username, as far as these records know: don't move it
     if phone:
         conn.execute(
             """
-            INSERT INTO chatreceipt.counterparties (customer_id, name, phone, labels, last_role, receipts)
-            VALUES (%s, %s, %s, %s, %s, 1)
+            INSERT INTO chatreceipt.counterparties (customer_id, name, phone, labels, last_role, receipts, username)
+            VALUES (%s, %s, %s, %s, %s, 1, %s)
             ON CONFLICT (customer_id, phone) WHERE phone IS NOT NULL DO UPDATE SET
                 name = EXCLUDED.name,
                 labels = ARRAY(SELECT DISTINCT label FROM unnest(chatreceipt.counterparties.labels || EXCLUDED.labels) AS label LIMIT 10),
                 last_role = COALESCE(EXCLUDED.last_role, chatreceipt.counterparties.last_role),
                 receipts = chatreceipt.counterparties.receipts + 1,
+                username = COALESCE(chatreceipt.counterparties.username, EXCLUDED.username),
                 last_seen_at = now()
             """,
-            (customer_id, name, phone, labels, last_role),
+            (customer_id, name, phone, labels, last_role, username or None),
+        )
+        return
+    if username:
+        if counterparty_id is not None:
+            # The entry their chat label suggested, confirmed on this receipt: it gets the username.
+            updated = conn.execute(
+                """
+                UPDATE chatreceipt.counterparties
+                SET name = %s, username = %s, last_role = COALESCE(%s, last_role), receipts = receipts + 1, last_seen_at = now()
+                WHERE id = %s AND customer_id = %s AND username IS NULL
+                RETURNING id
+                """,
+                (name, username, last_role, counterparty_id, customer_id),
+            ).fetchone()
+            if updated is not None:
+                return
+        conn.execute(
+            "INSERT INTO chatreceipt.counterparties (customer_id, name, username, labels, last_role, receipts) VALUES (%s, %s, %s, %s, %s, 1)",
+            (customer_id, name, username, labels, last_role),
         )
         return
     if not key:
@@ -277,6 +357,7 @@ def record_inbound(conn: Connection, message: InboundMessage, *, business_number
     """Store a delivered message once. False means this message ID was already stored."""
     customer_id = resolve_customer(conn, message.sender)
     note_whatsapp_name(conn, customer_id, message.sender.profile_name)
+    note_whatsapp_username(conn, customer_id, message.sender.username)
     note_business_number(conn, customer_id, business_number_id)
     row = conn.execute(
         """
@@ -588,10 +669,14 @@ def save_transaction(
     amount_paid: Decimal | None,
     outstanding: Decimal | None,
     owner_role: str | None = None,
+    payment_check: str | None = None,
+    payment_reference: str | None = None,
 ) -> Row:
     """Save a confirmed record. Saving the same submission twice returns the first record.
 
     ``owner_role`` is the side the customer was on ("seller" or "buyer"), when it was known.
+    ``payment_check`` is "claimed" when money is recorded as paid to the customer and they haven't
+    said yet whether it arrived. Every record gets a code for the other person's confirmation link.
     """
     number = customer["next_record_no"]
     hashes = [image["sha256"] for image in submission["images"] if image.get("sha256")]
@@ -599,9 +684,10 @@ def save_transaction(
         """
         INSERT INTO chatreceipt.transactions (
             customer_id, record_no, reference, submission_id, draft, calculation, currency, seller, buyer,
-            transaction_date, total, amount_paid, outstanding, payment_status, edited_fields, image_hashes, owner_role
+            transaction_date, total, amount_paid, outstanding, payment_status, edited_fields, image_hashes, owner_role,
+            payment_check, payment_reference, confirm_code
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (submission_id) DO NOTHING
         RETURNING *
         """,
@@ -610,6 +696,7 @@ def save_transaction(
             draft["currency"], draft["seller"].strip(), draft["buyer"].strip(), transaction_date, total, amount_paid,
             outstanding, draft["payment_status"], len(submission["edited_fields"]), hashes,
             owner_role if owner_role in ("seller", "buyer") else None,
+            payment_check if payment_check in PAYMENT_CHECKS else None, payment_reference or None, new_confirm_code(),
         ),
     ).fetchone()
     if row is None:
@@ -639,9 +726,142 @@ def find_saved_with_images(conn: Connection, customer_id: UUID, hashes: Sequence
     return row["reference"] if row else None
 
 
+def find_saved_with_reference(conn: Connection, customer_id: UUID, reference: str) -> Row | None:
+    """An earlier record of this customer's with the same transfer receipt reference."""
+    if not reference:
+        return None
+    return conn.execute(
+        f"""
+        SELECT {_RECORD_COLUMNS} FROM chatreceipt.transactions
+        WHERE customer_id = %s AND payment_reference = %s AND voided_at IS NULL
+        ORDER BY created_at DESC LIMIT 1
+        """,  # noqa: S608 - only fixed column names are interpolated
+        (customer_id, reference),
+    ).fetchone()
+
+
+# -- Payment checks: did money recorded as paid reach the customer? ------------------------------
+
+PAYMENT_CHECKS = ("claimed", "received", "not_received")
+
+
+def set_payment_check(conn: Connection, customer_id: UUID, transaction_id: UUID, state: str) -> Row | None:
+    """The customer's answer about a payment on one of their own records. ChatReceipt verifies nothing itself."""
+    if state not in PAYMENT_CHECKS:
+        raise ValueError(f"Unknown payment check: {state}")
+    return conn.execute(
+        """
+        UPDATE chatreceipt.transactions SET payment_check = %s, payment_checked_at = now()
+        WHERE id = %s AND customer_id = %s AND voided_at IS NULL AND payment_check IS NOT NULL
+        RETURNING *
+        """,
+        (state, transaction_id, customer_id),
+    ).fetchone()
+
+
+# -- The other person's confirmation -------------------------------------------------------------
+
+_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"  # no 0/O, 1/I/L: easy to read back
+CONFIRM_CODE_LENGTH = 10
+
+
+def new_confirm_code() -> str:
+    """A code for a record's confirmation link: about 50 random bits, so it can't be guessed."""
+    return "".join(secrets.choice(_CODE_ALPHABET) for _ in range(CONFIRM_CODE_LENGTH))
+
+
+def ensure_confirm_code(conn: Connection, customer_id: UUID, transaction_id: UUID) -> str:
+    """The record's confirmation code, created for records saved before codes existed."""
+    row = conn.execute(
+        """
+        UPDATE chatreceipt.transactions SET confirm_code = COALESCE(confirm_code, %s)
+        WHERE id = %s AND customer_id = %s
+        RETURNING confirm_code
+        """,
+        (new_confirm_code(), transaction_id, customer_id),
+    ).fetchone()
+    return row["confirm_code"] if row else ""
+
+
+def record_by_code(conn: Connection, code: str) -> Row | None:
+    """The record a confirmation link points to, whoever saved it, with the saver's names.
+
+    The code is the only key: whoever has the link was sent it by the record's owner.
+    """
+    if len(code) != CONFIRM_CODE_LENGTH or any(character not in _CODE_ALPHABET for character in code):
+        return None
+    return conn.execute(
+        """
+        SELECT t.*, c.party_name AS owner_party_name, c.whatsapp_name AS owner_whatsapp_name
+        FROM chatreceipt.transactions t JOIN chatreceipt.customers c ON c.id = t.customer_id
+        WHERE t.confirm_code = %s AND t.voided_at IS NULL
+        """,
+        (code,),
+    ).fetchone()
+
+
+def latest_response(conn: Connection, transaction_id: UUID, *, responder_id: UUID | None = None) -> Row | None:
+    """The newest answer to a record, from anyone or from one responder."""
+    return conn.execute(
+        """
+        SELECT * FROM chatreceipt.record_responses
+        WHERE transaction_id = %s AND (%s::uuid IS NULL OR responder_id = %s)
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (transaction_id, responder_id, responder_id),
+    ).fetchone()
+
+
+def add_response(conn: Connection, transaction_id: UUID, responder: Row, response: str, *, note: str = "") -> Row:
+    """Keep the other person's answer, with how WhatsApp identified them."""
+    if response not in ("agreed", "disputed"):
+        raise ValueError(f"Unknown response: {response}")
+    return conn.execute(  # type: ignore[return-value]
+        """
+        INSERT INTO chatreceipt.record_responses
+            (transaction_id, responder_id, responder_phone, responder_username, responder_name, response, note)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING *
+        """,
+        (
+            transaction_id, responder["id"], responder.get("whatsapp_phone"), responder.get("whatsapp_username"),
+            responder.get("whatsapp_name"), response, note[:500] or None,
+        ),
+    ).fetchone()
+
+
+def responses_for(conn: Connection, customer_id: UUID, transaction_id: UUID) -> list[Row]:
+    """Every answer to one of the customer's own records, newest first."""
+    return conn.execute(
+        """
+        SELECT r.response, r.note, r.responder_phone, r.responder_username, r.responder_name, r.created_at
+        FROM chatreceipt.record_responses r JOIN chatreceipt.transactions t ON t.id = r.transaction_id
+        WHERE r.transaction_id = %s AND t.customer_id = %s
+        ORDER BY r.created_at DESC LIMIT 20
+        """,
+        (transaction_id, customer_id),
+    ).fetchall()
+
+
+def customer_contact(conn: Connection, customer_id: UUID) -> Row | None:
+    """Where to send a customer a message, without locking them (another customer's turn may be running)."""
+    return conn.execute(
+        "SELECT id, whatsapp_user_id, whatsapp_phone FROM chatreceipt.customers WHERE id = %s", (customer_id,)
+    ).fetchone()
+
+
+def set_awaiting(conn: Connection, customer_id: UUID, awaiting: dict[str, Any] | None) -> None:
+    """A question the customer is answering outside a draft, or None when there's none."""
+    conn.execute(
+        "UPDATE chatreceipt.customers SET awaiting = %s WHERE id = %s", (Jsonb(awaiting) if awaiting else None, customer_id)
+    )
+
+
 _RECORD_COLUMNS = (
     "id, reference, source, currency, seller, buyer, transaction_date, total, amount_paid, outstanding, payment_status, created_at,"
-    " owner_role"
+    " owner_role, payment_check,"
+    " (SELECT r.response FROM chatreceipt.record_responses r WHERE r.transaction_id = transactions.id"
+    " ORDER BY r.created_at DESC LIMIT 1) AS response"
 )
 
 
@@ -907,7 +1127,8 @@ def search_transactions(
         conditions.append(f"{day} <= %s")
         parameters += [timezone, date_to]
     if status == "owed":
-        conditions.append("outstanding > 0")
+        # A payment the chat recorded but the customer hasn't seen arrive may still be owed too.
+        conditions.append("(outstanding > 0 OR (payment_check IN ('claimed', 'not_received') AND amount_paid > 0))")
     elif status in ("unpaid", "partially_paid", "paid"):
         conditions.append("payment_status = %s")
         parameters.append(status)

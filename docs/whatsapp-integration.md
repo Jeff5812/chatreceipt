@@ -133,6 +133,34 @@ With no draft open, a message that isn't a command is treated as a question (`ap
 3. The answer comes from the customer's own records. The AI never supplies a figure: totals and amounts owed are added up per currency by the backend. A name or reference is searched for only if the message contains it, and the AI's one-line reaction is dropped if it states a figure the customer didn't write or says a payment is verified.
 4. While a question is being read, the customer's next messages wait, so replies stay in order.
 
+### Payment checks
+
+A payment the chat records is a claim, not money. When a saved record says money was paid to the customer (they were the seller), the "Saved" message asks: *Has ₦10,000 from Ada reached your account? Check your bank app before you hand anything over*, with **Yes, it's arrived**, **Not yet** and **Get PDF**.
+
+- The answer is stored on the record (`transactions.payment_check`): `claimed` until they answer, then `received` or `not_received`. **Not yet** leaves an **It's arrived** button to tap later.
+- "Who still owes me?" lists, besides balances, money paid in the chat but not in their account yet, and payments they haven't checked.
+- ChatReceipt never verifies a payment itself: `received` is the customer's own answer, and the record still says "ChatReceipt doesn't verify payments".
+- A transfer receipt's reference or session ID is read from the screenshot (`payment_reference`, letters and digits only). If the same reference is already on another of the customer's records, the new draft says so under *Please check*: one receipt sent for two payments can be a sign of a fake transfer. It's a check, never an accusation.
+- Not yet built: matching claims against the customer's bank statement or alerts. It needs real statement samples (OPay, Moniepoint, PalmPay, the banks) to parse reliably.
+
+### The other person's confirmation
+
+Each saved record gets a code, and its receipt caption carries a link: *Ada Obi, is this right? Tap to confirm it: `https://wa.me/<ChatReceipt's number>?text=CONFIRM%20K7Q2M9XWAB`*. The caption travels with the image when the customer forwards it.
+
+1. The other person taps the link; WhatsApp opens with the message written, and they send it. They messaged first, so no opt-in or paid template is needed.
+2. ChatReceipt shows them that record only (who saved it, the items, total, paid and remaining) with **Yes, it's right** and **Something's wrong**, and says their answer goes to the record's owner with their WhatsApp name and number.
+3. **Yes** stores `agreed`; **Something's wrong** asks what, and stores their next message as the note (`disputed`). The owner gets a message either way (if their 24-hour window is open) and sees it on the record: *✅ confirmed by them* or *⚠️ disputed* in `recent`, and on the records page.
+4. The code is the only key: 10 characters from 31 (about 50 random bits), so records can't be found by guessing. A code from the owner's own record just reminds them to forward it.
+5. `WHATSAPP_DISPLAY_NUMBER` sets the number in the link; without it, receipts carry no link. Records saved before codes existed get one when their receipt is sent again.
+
+### Usernames
+
+WhatsApp users can hide their number behind a username. Meta then sends only their business-scoped user ID (`from_user_id`, the identity ChatReceipt already used) and the username (`contacts[].profile.username`); replies go to the user ID (`"recipient"`) instead of a number (`"to"`).
+
+- The customer's username is kept for display (`customers.whatsapp_username`), never as an identity.
+- A chat label in the `@` form (`@ada_closet`) is read as the other person's username. Like a phone number, it recognises them reliably on the next receipt (`counterparties.username`); a plain name never does. A username already remembered for someone with a different number is never moved to another person.
+- When someone's user ID changes (`user_changed_user_id`, with or without a number), their records follow them.
+
 ## Customer identity
 
 The repository had no accounts, so a customer is identified by the sender on Meta's signed webhook, using Meta's business-scoped user ID.
@@ -171,7 +199,8 @@ The repository had no accounts, so a customer is identified by the sender on Met
 - ChatReceipt never stores screenshot images. It keeps WhatsApp's media ID, downloads the image when reading it, and discards it. Meta holds the media under its own terms.
 - Chat exports are handled the same way: downloaded, read in memory and discarded. Nothing from a ZIP is written to disk. Closed drafts keep the media ID for a day, so `deal 2` can read the export again.
 - Screenshots and chat exports are sent to the configured AI provider to be read.
-- For each person a customer confirms on a receipt, ChatReceipt keeps the name, the phone number's digits when the chat showed one, and up to ten chat labels, to fill the next receipt. These are deleted with `delete my data`.
+- For each person a customer confirms on a receipt, ChatReceipt keeps the name, the phone number's digits or WhatsApp username when the chat showed one, and up to ten chat labels, to fill the next receipt. These are deleted with `delete my data`.
+- When someone answers a record's confirmation link, their answer is kept on that record with their WhatsApp name and number (or username), and the record's owner sees them. If they later send `delete my data`, their name, number and username are removed from those answers; the answer itself stays on the owner's record.
 - Receipt images and PDFs are created when they're sent and aren't stored by ChatReceipt. They're uploaded to WhatsApp to be delivered, and Meta holds them under its own terms.
 - Confirmed records are stored until the customer deletes them. Unconfirmed drafts are deleted after 72 hours.
 - Message text is cleared from the message queue once handled, and reply content once sent.
@@ -209,6 +238,7 @@ Fill these in `backend/.env`, then restart the API:
 | `WHATSAPP_PHONE_NUMBER_ID` | From the WhatsApp API setup page |
 | `WHATSAPP_APP_SECRET` | From App settings > Basic |
 | `WHATSAPP_VERIFY_TOKEN` | The value you chose |
+| `WHATSAPP_DISPLAY_NUMBER` | The number in international form (2348012345678), for the confirmation link on receipts |
 | `PUBLIC_WEB_URL` | The website's public address |
 
 ### 4. Webhook
@@ -259,7 +289,16 @@ Send "hi" to the number, then a screenshot, then confirm. Meta's test number can
 
 ## Cost
 
-Meta gives each business number [1,000 delivered service messages a month for free](https://developers.facebook.com/documentation/business-messaging/whatsapp/pricing) and charges from message 1,001. A returning customer's receipt uses at least three replies (acknowledgement, summary and saved confirmation), and each correction adds more, so the free tier covers roughly 300 simple receipts a month.
+Since 1 October 2026 Meta charges for every reply in the 24-hour window, with the [first 1,000 a month per number free](https://developers.facebook.com/documentation/business-messaging/whatsapp/pricing/non-template-messages), at about the utility-message rate for the recipient's country. Nigerian press put that near $0.0101 (about ₦14) a message; Meta hasn't confirmed a Nigerian figure. Past 1,000 a month the WhatsApp account needs a payment method.
+
+Replies are kept few:
+
+- A returning customer's receipt takes three: the summary with its question, the receipt image and *Saved* (which carries the payment question when there is one).
+- "I'm reading it now" goes only to customers who haven't saved a record yet. Everyone sees WhatsApp's typing indicator, which costs nothing, from the moment the screenshot is handled.
+- Each correction adds one or two replies.
+- A confirmation by the other person takes two replies to them and one to the owner.
+
+The free tier covers roughly 300 simple receipts a month.
 
 AI usage is separate. Gemini's free tier allows **20 requests a day per model** (measured on 2026-11-19). Each screenshot uses one request on the main model, and each typed correction that isn't a bare amount uses one on the light model, so the free tier covers roughly 20 screenshots a day, or about 40 with the fallback model. Real use needs a paid Gemini plan.
 
@@ -296,7 +335,9 @@ python -m pytest tests/test_whatsapp_flow.py tests/test_whatsapp_units.py
 - On Render's free plan the API sleeps after 15 minutes without traffic and takes up to a minute to wake, so the first reply after a quiet spell is slow. Meta delivers the message again if the API doesn't answer in time; it is handled once.
 - Gemini's free tier limits it to about 20 screenshots a day (see Cost).
 - A correction the AI misreads is shown to the customer before anything is saved, but isn't flagged as uncertain.
-- Saved records can't be edited after confirmation. The customer can delete all their data, but not one record.
+- Saved records can't be edited after confirmation. The customer can delete all their data, but not one record. A disputed record is fixed by saving a new one.
+- The owner's notice that someone confirmed or disputed a record only arrives if they've messaged ChatReceipt in the last 24 hours (WhatsApp's rule); otherwise it's on the record in `recent` and on the records page.
+- Payments aren't matched against bank statements or alerts yet; "received" is the customer's own answer.
 - WhatsApp records and website uploads are separate: the website's upload workflow still saves nothing.
 - Rate limits for the sign-in endpoint are kept in memory per server. The per-customer WhatsApp limits are stored in the database.
 - A group chat export is read, but nobody in it is remembered as "the other person", and the customer's side is known only if their own name matches one sender.

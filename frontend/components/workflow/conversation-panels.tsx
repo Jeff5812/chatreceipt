@@ -156,7 +156,7 @@ export function ChatExportCard({ file, chat }: { file: File | null; chat: ChatSu
               <span className="font-medium">{person.name}</span>
               {SIDE_WORDS[person.side] && <span className="text-muted"> · {SIDE_WORDS[person.side]}</span>}
             </span>
-            <span className="shrink-0 font-mono text-caption text-muted tabular-nums">{person.messages}</span>
+            <span className="shrink-0 font-mono text-caption text-muted tabular-nums">{person.messages} sent</span>
           </li>
         ))}
       </ul>

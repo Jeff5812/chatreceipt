@@ -126,8 +126,8 @@ def recall_counterparty(
 ) -> tuple[TransactionDraft, dict[str, Any]]:
     """The other side's name as the customer confirmed it on an earlier receipt.
 
-    A phone-number match is reliable, so the confirmed name is used; if the chat gave them another
-    name, that name is kept in the state for a check. A label match (the name at the top of a chat,
+    A phone-number or username match is reliable, so the confirmed name is used; if the chat gave
+    them another name, that name is kept in the state for a check. A label match (the name at the top of a chat,
     an export's sender label) is only a suggestion: it replaces the label itself, never a name the
     conversation gave some other way, which is kept with a check instead. Every name filled from an
     earlier receipt is marked on the draft.
@@ -141,7 +141,7 @@ def recall_counterparty(
     remembered = {"id": str(row["id"]), "match": how, "name": row["name"]}
     if same_name(current, row["name"]):
         return draft, {**state, "counterpart": remembered}
-    if not current or same_name(current, label) or how == "phone":
+    if not current or same_name(current, label) or how in ("phone", "username"):
         return draft.model_copy(update={theirs: row["name"]}), {**state, "counterpart": {**remembered, "was": current}}
     # Only the label matched, and the conversation names them differently: keep what it shows.
     return draft, {**state, "known_as": remembered}
@@ -180,7 +180,7 @@ def counterpart_to_remember(draft: TransactionDraft, state: Mapping[str, Any]) -
     counterpart = state.get("counterpart") or {}
     return {
         "name": name, "phone": state.get("other_phone") or "", "label": state.get("other_party") or "", "role": theirs,
-        "counterparty_id": counterpart.get("id"),
+        "counterparty_id": counterpart.get("id"), "username": state.get("other_username") or "",
     }
 
 

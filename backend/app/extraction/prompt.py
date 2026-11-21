@@ -141,6 +141,9 @@ payment was for ("advance for logo work"), add one line item with that descripti
 and an empty unit_price. Set payment_status to partially_paid when it's called an advance, \
 deposit or part payment, paid only when the conversation says it settles the full price, and \
 not_specified otherwise.
+- payment_reference: the reference, session ID or transaction ID printed on such a receipt, \
+copied exactly. Leave it empty when there is no receipt, or no reference on it. Never take it from \
+a chat message.
 - payment_terms and delivery_terms: one or two short, factual sentences about what each side \
 said, such as "Buyer says they will transfer tomorrow." Don't add commitments nobody made.
 - notes: other details that matter to the agreement (collection point, warranty, conditions), \
@@ -161,7 +164,8 @@ Set review_required to true when any of these apply: the agreed price is unclear
 conflict; the payment status is ambiguous; the product or quantity is unclear; there's more than \
 one possible agreement; a correction can't be confidently resolved; essential details conflict. \
 Add one ambiguity per issue, naming the field it concerns, written as a sentence the person can \
-act on.
+act on. A total or balance the conversation doesn't state is not an issue: ChatReceipt adds them \
+up, so never report one as missing.
 
 summary: one or two plain sentences describing the agreement, such as "The buyer agreed to buy \
 a brown leather bag for ₦17,000 plus ₦2,000 delivery and says they will transfer tomorrow." \

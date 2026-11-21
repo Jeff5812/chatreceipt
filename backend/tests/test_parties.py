@@ -56,6 +56,19 @@ def test_an_unsure_reading_of_the_owners_side_is_not_used() -> None:
     assert response.parties.other_party == "Ada Obi"  # kept, to ask which side the customer is on
 
 
+def test_a_total_the_chat_never_stated_isnt_a_check_but_conflicting_figures_are() -> None:
+    unstated = [
+        {"field": "agreed_total", "description": "The explicit agreed total is not stated in the conversation, only the item price and delivery fee."},
+        {"field": "outstanding_amount", "description": "The outstanding amount isn't mentioned."},
+    ]
+    assert mapped(ambiguities=unstated).review_reasons == []
+    conflict = [{"field": "agreed_total", "description": "The seller says the total is ₦20,000 but the buyer says ₦25,000."}]
+    assert [reason.message for reason in mapped(ambiguities=conflict).review_reasons] == [conflict[0]["description"]]
+    # A total the chat did state, called unclear, is still for the person to check.
+    stated = [{"field": "agreed_total", "description": "The total stated isn't explicit about delivery."}]
+    assert len(mapped(agreed_total=field("19000", quote="Total 19k"), ambiguities=stated).review_reasons) == 1
+
+
 def test_an_answer_from_before_these_fields_existed_still_reads() -> None:
     legacy = bag_conversation_output()
     response = build_extraction_response(AIExtraction.model_validate(legacy), screenshots=1, images_sent=1)
@@ -161,7 +174,7 @@ def test_nothing_is_recalled_without_knowing_the_customers_side() -> None:
 def test_what_is_remembered_after_saving() -> None:
     state = {"owner_role": "buyer", "other_party": "Kemi", "other_phone": "2348031234567", "counterpart": {"id": "abc"}}
     assert parties.counterpart_to_remember(draft(seller="Kemi Fabrics"), state) == {
-        "name": "Kemi Fabrics", "phone": "2348031234567", "label": "Kemi", "role": "seller", "counterparty_id": "abc",
+        "name": "Kemi Fabrics", "phone": "2348031234567", "label": "Kemi", "role": "seller", "counterparty_id": "abc", "username": "",
     }
     assert parties.counterpart_to_remember(draft(), {"owner_role": ""}) is None  # neither side, or not known
     assert parties.counterpart_to_remember(draft(buyer=""), {"owner_role": "seller"}) is None  # no name to remember
@@ -272,6 +285,20 @@ def test_the_senders_profile_name_is_read_but_is_not_their_identity() -> None:
 
 
 # -- money owed, from the customer's side ------------------------------------------------------------------------
+
+
+def test_totals_keep_purchases_apart_from_sales() -> None:
+    from app.whatsapp.assistant import totals_text
+
+    rows = [
+        {"buyer": "Ada", "seller": "Tola's Bags", "currency": "NGN", "total": Decimal("19000"), "amount_paid": Decimal("4000"), "outstanding": Decimal("15000"), "owner_role": "seller"},
+        {"buyer": "Tola's Bags", "seller": "Kemi Fabrics", "currency": "NGN", "total": Decimal("8000"), "amount_paid": Decimal("0"), "outstanding": Decimal("8000"), "owner_role": "buyer"},
+    ]
+    assert totals_text(rows, "this week").splitlines() == [
+        "*Your records this week* · 2 records",
+        "Agreed ₦19,000.00 · paid ₦4,000.00 · still owed ₦15,000.00",
+        "As the buyer (1 record): agreed ₦8,000.00 · paid ₦0.00 · you still owe ₦8,000.00",
+    ]
 
 
 def test_money_the_customer_owes_is_listed_apart_from_money_owed_to_them() -> None:

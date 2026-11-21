@@ -94,6 +94,10 @@ class Settings(BaseSettings):
     # WhatsApp Cloud API credentials, from the Meta app dashboard.
     whatsapp_access_token: SecretStr | None = None
     whatsapp_phone_number_id: str = ""
+    # ChatReceipt's own WhatsApp number as people dial it, in international form (2348012345678). It
+    # goes into the link on each receipt that lets the other person confirm it; without it, receipts
+    # carry no link.
+    whatsapp_display_number: str = ""
     # Signs every webhook delivery; deliveries that don't verify against it are refused.
     whatsapp_app_secret: SecretStr | None = None
     # A value you choose and enter in the dashboard when registering the webhook.
@@ -199,6 +203,12 @@ class Settings(BaseSettings):
     @property
     def web_url(self) -> str:
         return (self.public_web_url or (self.cors_origins[0] if self.cors_origins else "")).rstrip("/")
+
+    @property
+    def whatsapp_link_number(self) -> str:
+        """ChatReceipt's number for wa.me links: digits only, or "" when it isn't set or isn't a number."""
+        digits = "".join(character for character in self.whatsapp_display_number if character.isdigit())
+        return digits if 7 <= len(digits) <= 15 else ""
 
     @property
     def cors_origins(self) -> list[str]:

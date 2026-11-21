@@ -77,7 +77,7 @@ for a chat.
 | --- | --- | --- |
 | POST | `/api/records/session` | Exchange the one-time code from a WhatsApp link for a session |
 | POST | `/api/records/session/end` | Sign out |
-| GET | `/api/records`, `/api/records/{id}` | The signed-in customer's saved records, each with `owner_role` (`"seller"`, `"buyer"` or `null` when their side wasn't known) |
+| GET | `/api/records`, `/api/records/{id}` | The signed-in customer's saved records, each with `owner_role` (`"seller"`, `"buyer"` or `null` when their side wasn't known), `payment_check` (`"claimed"`, `"received"`, `"not_received"` or `null`: the customer's own answer, never a verification) and `response` (the other person's latest answer to the record's confirmation link: `"agreed"`, `"disputed"` or `null`). One record also lists every answer in `responses`, with the note, name and number or `@username` |
 
 The WhatsApp webhook (`GET`/`POST /api/whatsapp/webhook`) is not in the OpenAPI document: Meta calls it,
 and every delivery must carry a valid `X-Hub-Signature-256` made with the app secret.

@@ -22,9 +22,11 @@ from app.extraction.provider import ErrorKind, ExtractionProvider, ExtractionPro
 from app.extraction.chat import run_chat_extraction
 from app.extraction.service import run_extraction
 from app.models import ExtractionResponse
+from app.names import username_in_label
 from app.observability import log_event
 from app.uploads import UploadedFile, UploadRejected, prepare_screenshots
 from app.whatsapp import parties, store
+from app.whatsapp.assistant import other_party
 from app.whatsapp.client import MediaError, WhatsAppClient
 from app.whatsapp.events import CHAT_EXPORT_TYPES
 from app.whatsapp.conversation import Turn
@@ -63,6 +65,9 @@ class Failure:
     code: str
     message: str
     retryable: bool
+    # Whether the customer's "Try again" could give a different result. Reading the same unusable file
+    # again can't, so that failure offers only a new file.
+    retry_helps: bool = True
 
 
 def failure_from(exc: Exception) -> Failure:
@@ -70,10 +75,10 @@ def failure_from(exc: Exception) -> Failure:
         return Failure(f"ai_{exc.kind.value}", _MESSAGES.get(exc.kind, TRY_AGAIN), exc.kind in _RETRYABLE_KINDS)
     if isinstance(exc, UploadRejected):
         if exc.code in CHAT_EXPORT_CODES:
-            return Failure(exc.code, f"{exc.message} Nothing was saved.", False)
-        return Failure(exc.code, f"{exc.message} Nothing was saved. Please send a clearer screenshot.", False)
+            return Failure(exc.code, f"{exc.message} Nothing was saved.", False, retry_helps=False)
+        return Failure(exc.code, f"{exc.message} Nothing was saved. Please send a clearer screenshot.", False, retry_helps=False)
     if isinstance(exc, MediaError):
-        return Failure(exc.code, DOWNLOAD_FAILED, exc.retryable)
+        return Failure(exc.code, DOWNLOAD_FAILED, exc.retryable, retry_helps=exc.retryable)
     return Failure("unexpected_error", TRY_AGAIN, True)
 
 
@@ -139,6 +144,12 @@ def finish_success(conn: Connection, settings: Settings, claimed: Row, response:
         "duplicate_reference": store.find_saved_with_images(conn, customer["id"], hashes),
         "parties": state,
     }
+    if response.payment_reference:
+        review["payment_reference"] = response.payment_reference
+        earlier = store.find_saved_with_reference(conn, customer["id"], response.payment_reference)
+        if earlier is not None:
+            review["reasons"].append({"field": "amount_paid", "message": reused_receipt(earlier, response.payment_reference)})
+            log_event("whatsapp.receipt_reused")
     if response.date_label:
         review["date_label"] = response.date_label  # shown next to the date, so an old screenshot is caught
     if response.source == "chat_export":
@@ -171,6 +182,16 @@ def finish_success(conn: Connection, settings: Settings, claimed: Row, response:
     )
 
 
+def reused_receipt(earlier: Row, reference: str) -> str:
+    """A check for a transfer receipt already on another record. Never called fake: it may be a genuine mistake."""
+    who = other_party(earlier, "")
+    return (
+        f"This transfer receipt (reference {reference}) is already on your record {earlier['reference']}"
+        f"{f' with {who}' if who else ''}. One receipt sent for two payments can be a sign of a fake transfer: "
+        "check your account before you hand anything over."
+    )
+
+
 def identify_parties(conn: Connection, customer: Row, response: ExtractionResponse) -> tuple[Any, dict[str, Any]]:
     """Who is who on a new draft, from the chat and from what the customer confirmed before.
 
@@ -178,25 +199,38 @@ def identify_parties(conn: Connection, customer: Row, response: ExtractionRespon
     confirmed for that person, matched by phone number or, as a marked suggestion, by chat label.
     """
     found = response.parties
-    state: dict[str, Any] = {"owner_role": found.owner_role, "other_party": found.other_party, "other_phone": found.other_phone}
+    state: dict[str, Any] = {
+        "owner_role": found.owner_role, "other_party": found.other_party, "other_phone": found.other_phone,
+        "other_username": found.other_username,
+    }
     owner_label = ""
     if response.chat is not None:
         owner_label = next((person.name for person in response.chat.participants if person.side == "owner"), "")
         contact = next((person for person in response.chat.participants if person.side == "contact"), None)
         if contact is not None and not response.chat.group:
             state["other_phone"] = state["other_phone"] or contact.phone
+            state["other_username"] = state["other_username"] or username_in_label(contact.name)
     if owner_label and not parties.phone_in_label(owner_label):
         state["owner_label"] = owner_label  # their own name in the export, offered when their name is asked
     payer = next(
-        (person.name for person in found.people if person.role == "payer" and person.name and not parties.same_name(person.name, response.draft.buyer)),
+        (
+            person.name
+            for person in found.people
+            if person.role == "payer" and person.name and not person.is_owner and not parties.same_name(person.name, response.draft.buyer)
+        ),
         "",
     )
     if payer:
         state["paid_by"] = payer
     draft, state = parties.fill_saved_name(response.draft, state, customer.get("party_name"), owner_label=owner_label)
+    role = state.get("owner_role") or ""
+    if "you" not in state and role in parties.ROLES and owner_label and parties.same_name(getattr(draft, role), owner_label):
+        state["you"] = role  # their own name as the export labels them, so it's marked as theirs
     match = None
-    if state["owner_role"] and (state["other_phone"] or state["other_party"]):
-        match = store.find_counterparty(conn, customer["id"], phone=state["other_phone"], label=state["other_party"])
+    if state["owner_role"] and (state["other_phone"] or state["other_username"] or state["other_party"]):
+        match = store.find_counterparty(
+            conn, customer["id"], phone=state["other_phone"], username=state["other_username"], label=state["other_party"]
+        )
     draft, state = parties.recall_counterparty(draft, state, match)
     log_event(
         "whatsapp.parties_read",
@@ -233,16 +267,13 @@ def finish_failure(conn: Connection, settings: Settings, claimed: Row, failure: 
     message = failure.message
     if export:
         message = {TRY_AGAIN: TRY_AGAIN_CHAT, DOWNLOAD_FAILED: DOWNLOAD_FAILED_CHAT, DECLINED: DECLINED_CHAT, UNAVAILABLE: UNAVAILABLE_CHAT}.get(message, message)
-    turn.send(_after_failure(message, export=export))
+    turn.send(_after_failure(message, export=export, offer_retry=failure.retry_helps))
     log_event("whatsapp.submission_finished", outcome="failed", code=failure.code, attempts=submission["attempts"], export=export)
 
 
-def _after_failure(message: str, *, export: bool = False) -> dict[str, Any]:
+def _after_failure(message: str, *, export: bool = False, offer_retry: bool = True) -> dict[str, Any]:
+    retry = [(reply_id("menu", arg="retry"), "Try again")] if offer_retry else []
     return button_message(
         message,
-        [
-            (reply_id("menu", arg="retry"), "Try again"),
-            (reply_id("menu", arg="scan"), "Send screenshots" if export else "New screenshot"),
-            (reply_id("menu", arg="help"), "Get help"),
-        ],
+        [*retry, (reply_id("menu", arg="scan"), "Send screenshots" if export else "New screenshot"), (reply_id("menu", arg="help"), "Get help")],
     )

@@ -11,7 +11,7 @@ import binascii
 from collections.abc import Callable
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, TypeVar
+from typing import Annotated, Literal, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -57,6 +57,11 @@ class RecordSummary(BaseModel):
     created_at: datetime
     # The side the customer was on, when it was known: "seller", "buyer", or None.
     owner_role: str | None = None
+    # Whether money recorded as paid reached the customer, in their own words: "claimed" (not checked
+    # yet), "received", "not_received", or None when there's nothing to check. Never a verification.
+    payment_check: Literal["claimed", "received", "not_received"] | None = None
+    # The other person's latest answer to the record's confirmation link: "agreed", "disputed" or None.
+    response: Literal["agreed", "disputed"] | None = None
 
 
 class RecordList(BaseModel):
@@ -64,9 +69,21 @@ class RecordList(BaseModel):
     next_before: str | None
 
 
+class RecordResponse(BaseModel):
+    """One answer from the other person, as WhatsApp identified them."""
+
+    response: Literal["agreed", "disputed"]
+    note: str | None
+    name: str | None
+    # Their number with a "+", or their WhatsApp username with an "@", when known.
+    contact: str | None
+    created_at: datetime
+
+
 class RecordDetail(RecordSummary):
     draft: TransactionDraft
     calculation: Calculation
+    responses: list[RecordResponse] = Field(default_factory=list)
 
 
 def _database(request: Request) -> Database:
@@ -124,7 +141,14 @@ def _summary(row: store.Row) -> RecordSummary:
         payment_status=row["payment_status"],
         created_at=row["created_at"],
         owner_role=row.get("owner_role"),
+        payment_check=row.get("payment_check"),
+        response=row.get("response"),
     )
+
+
+def _response(row: store.Row) -> RecordResponse:
+    contact = f"+{row['responder_phone']}" if row["responder_phone"] else (f"@{row['responder_username']}" if row["responder_username"] else None)
+    return RecordResponse(response=row["response"], note=row["note"], name=row["responder_name"], contact=contact, created_at=row["created_at"])
 
 
 def _cursor(row: store.Row) -> str:
@@ -183,11 +207,17 @@ async def get_record(request: Request, record_id: str, customer_id: CurrentCusto
         parsed = UUID(record_id)
     except ValueError as exc:
         raise APIError(404, "not_found", "That record doesn't exist.") from exc
-    row = await _run(_database(request), lambda conn: store.get_transaction(conn, customer_id, parsed))
+    def read(conn: Connection) -> tuple[store.Row | None, list[store.Row]]:
+        found = store.get_transaction(conn, customer_id, parsed)
+        return found, store.responses_for(conn, customer_id, parsed) if found else []
+
+    row, responses = await _run(_database(request), read)
     if row is None:
         raise APIError(404, "not_found", "That record doesn't exist.")
+    summary = _summary({**row, "response": responses[0]["response"] if responses else None})
     return RecordDetail(
-        **_summary(row).model_dump(),
+        **summary.model_dump(),
         draft=TransactionDraft.model_validate(row["draft"]),
         calculation=Calculation.model_validate(row["calculation"]),
+        responses=[_response(response) for response in responses],
     )

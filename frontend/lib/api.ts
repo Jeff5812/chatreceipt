@@ -71,23 +71,53 @@ export async function previewDocument(draft: TransactionDraft, signal?: AbortSig
   return (await send("/api/documents/preview", { method: "POST", json: { draft }, signal })).text();
 }
 
+/** Render a record as a PDF or PNG file. */
+export async function fetchDocument(draft: TransactionDraft, format: "pdf" | "png", stats: ClientStats): Promise<File> {
+  const response = await send(`/api/documents/${format}`, { method: "POST", json: { draft, stats } });
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `chatreceipt.${format}`;
+  return new File([blob], filename, { type: blob.type || (format === "pdf" ? "application/pdf" : "image/png") });
+}
+
 export async function downloadDocument(
   draft: TransactionDraft,
   format: "pdf" | "png",
   stats: ClientStats,
 ): Promise<void> {
-  const response = await send(`/api/documents/${format}`, { method: "POST", json: { draft, stats } });
-  const blob = await response.blob();
-  const disposition = response.headers.get("Content-Disposition") ?? "";
-  const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `chatreceipt.${format}`;
-  const url = URL.createObjectURL(blob);
+  const file = await fetchDocument(draft, format, stats);
+  const url = URL.createObjectURL(file);
   const link = document.createElement("a");
   link.href = url;
-  link.download = filename;
+  link.download = file.name;
   document.body.append(link);
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+/** Whether this browser can hand a file to the phone's share sheet (Safari on iPhone, Chrome on Android). */
+export function canShareFiles(): boolean {
+  if (typeof navigator === "undefined" || typeof navigator.canShare !== "function") return false;
+  try {
+    return navigator.canShare({ files: [new File([""], "receipt.png", { type: "image/png" })] });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Open the share sheet with a file. Resolves false when the person closed the sheet. Rejects with a
+ * NotAllowedError when the browser wants a fresh tap (Safari does, after a slow download).
+ */
+export async function shareFile(file: File, title: string): Promise<boolean> {
+  try {
+    await navigator.share({ files: [file], title });
+    return true;
+  } catch (reason) {
+    if (reason instanceof DOMException && reason.name === "AbortError") return false;
+    throw reason;
+  }
 }
 
 interface ExtractOptions {

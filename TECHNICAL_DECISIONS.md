@@ -97,6 +97,43 @@ the other person is. The AI then reads numbered lines with the same schema as sc
 what, and when, is in the file: there's no reason to let a model guess it, and ZIPs need path, size and
 compression checks before anything is extracted.
 
+**16d. A payment in the chat is a claim until the customer says it arrived** (2026-11-21). The chat and
+a transfer receipt only show that someone says they paid; fake transfer receipts are common. Saving a
+record where money was paid to the customer asks whether it reached their account, on the same
+message as "Saved", and the answer is stored separately from the payment status. A receipt reference
+already on another record is pointed out, never called fake. *Why:* it builds the habit of checking the
+bank app before handing goods over, without ChatReceipt claiming to verify anything; matching against bank
+statements comes next, once there are real statements to build it from.
+
+**16e. The other person confirms through a wa.me link, not a web form** (2026-11-21). The link opens
+WhatsApp with "CONFIRM <code>" written; sending it identifies them the way WhatsApp does, and since they
+messaged first, ChatReceipt can answer without a paid template or an opt-in. The code (about 50 random
+bits) is the only key, and shows that one record. *Why:* a confirmation from the other side is what turns
+a tidy summary into a record both sides agree on, and every confirmation introduces ChatReceipt to someone
+new. Nigerians are rightly wary of links; one that opens WhatsApp with a visible message asks for less trust
+than a web page.
+
+**16f. Fewer WhatsApp messages per receipt** (2026-11-21). Meta has charged for every reply above 1,000 a
+month per number since 1 October 2026. "I'm reading it now" goes only to customers who haven't saved a
+record (everyone sees the free typing indicator), and the payment question rides on the "Saved" message.
+A returning customer's receipt takes three replies. *Why:* the cost per receipt decides what ChatReceipt
+can charge.
+
+**16g. Usernames are shown, never used as identity** (2026-11-21). People can hide their number behind a
+WhatsApp username, and Meta then sends only the business-scoped user ID, which was already the
+customer's identity; replies go to it. Another person's `@username` in a chat recognises them like a phone
+number does. *Why:* usernames can be changed and are chosen by the person, so they're good for
+recognising a contact the customer confirmed, but not for granting access.
+
+**16h. One deployable application, two processes** (2026-11-21). The API and the WhatsApp worker are one
+codebase and one database; the worker can already run as its own process (`python -m
+app.whatsapp.worker`, `WHATSAPP_WORKER_IN_PROCESS=false`), and both scale by running more copies, because
+every job is claimed with row locks. Microservices were considered for future scale and not chosen.
+*Why:* what limits ChatReceipt is the AI quota and WhatsApp's per-message charge, not CPU. Splitting into
+services would add network calls, deployments and failure modes (and hosting cost) without lifting
+either limit. Split a part out only when it needs different scaling or isolation: the PDF renderer
+(Chromium, memory-hungry) is the first candidate.
+
 ## Documents and hosting
 
 **17. One HTML template printed by Chromium** for HTML, PDF and PNG. *Why:* the record looks identical

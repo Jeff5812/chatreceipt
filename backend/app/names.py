@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 
 _PHONE_LABEL = re.compile(r"^\+?[\d\s\-().]{7,22}$")
+# A WhatsApp username as a chat shows it: "@" and 3 to 35 letters, digits, periods or underscores.
+_USERNAME_LABEL = re.compile(r"^@([A-Za-z0-9._]{3,35})$")
 
 
 def name_key(name: str) -> str:
@@ -35,3 +37,13 @@ def phone_in_label(label: str) -> str:
         return ""
     digits = re.sub(r"\D", "", label)
     return digits if 7 <= len(digits) <= 15 else ""
+
+
+def username_in_label(label: str) -> str:
+    """The username in a label that is a WhatsApp username ("@ada_closet"), lower-cased, otherwise "".
+
+    People can hide their number behind a username, so a chat may show "@ada_closet" where it used
+    to show a number. Only the "@" form counts: a plain word could just as well be a contact's name.
+    """
+    found = _USERNAME_LABEL.match(label.strip())
+    return found.group(1).lower() if found else ""

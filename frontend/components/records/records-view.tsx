@@ -16,7 +16,7 @@ import {
 import type { CurrencyInfo } from "@/lib/types";
 import { Logo } from "../brand";
 import { Button } from "../ui/button";
-import { DownloadIcon } from "../ui/icons";
+import { AlertIcon, CheckIcon, DownloadIcon, InfoIcon } from "../ui/icons";
 import { PixelSpinner } from "../ui/pixel-spinner";
 import { StatusPill } from "../ui/status";
 import { WhatsAppButton } from "../whatsapp-button";
@@ -37,6 +37,35 @@ function readableDate(record: RecordSummary): string {
     year: "numeric",
     timeZone: "UTC",
   });
+}
+
+// The other person's answer to the record's confirmation link, and whether its payment arrived, both in
+// words with an icon, so neither relies on colour. "Arrived" is the customer's own answer, not a check.
+const ANSWERS = {
+  agreed: { icon: CheckIcon, text: "Confirmed by them", look: "text-ink-soft" },
+  disputed: { icon: AlertIcon, text: "They say something's wrong", look: "text-warn" },
+} as const;
+const PAYMENT_CHECKS = {
+  claimed: { icon: InfoIcon, text: "Payment not checked yet", look: "text-muted" },
+  not_received: { icon: AlertIcon, text: "Not in your account yet", look: "text-warn" },
+  received: { icon: CheckIcon, text: "You said the payment arrived", look: "text-ink-soft" },
+} as const;
+
+function RecordChecks({ record }: { record: RecordSummary }) {
+  const marks = [record.response ? ANSWERS[record.response] : null, record.payment_check ? PAYMENT_CHECKS[record.payment_check] : null].filter(
+    (mark) => mark !== null,
+  );
+  if (marks.length === 0) return null;
+  return (
+    <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-meta">
+      {marks.map(({ icon: Icon, text, look }) => (
+        <li key={text} className={`inline-flex items-center gap-1.5 ${look}`}>
+          <Icon className="size-4 shrink-0" />
+          {text}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function RecordCard({
@@ -74,6 +103,7 @@ function RecordCard({
           <dd className="mt-0.5 text-ink tabular-nums">{record.outstanding === null ? "Not stated" : money(record.outstanding)}</dd>
         </div>
       </dl>
+      <RecordChecks record={record} />
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-xs text-meta leading-relaxed text-muted">Recorded from the chat. ChatReceipt doesn&apos;t verify payments.</p>
         <Button size="sm" variant="secondary" disabled={busy} onClick={onDownload}>

@@ -6,8 +6,11 @@ import io
 import zipfile
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
+from app.chat_import import read_chat_export
+from app.extraction.chat import clean_prose, clean_quote
 from app.extraction.provider import ErrorKind, ExtractionProviderError, ImagePart
 from app.main import create_app
 from tests.samples import FakeProvider, FakeRenderer, bag_conversation_output, field, image_bytes, line_item, make_settings
@@ -125,6 +128,55 @@ def test_an_export_over_the_size_limit_is_refused_before_it_is_read() -> None:
     client = TestClient(create_app(settings=make_settings(max_chat_export_bytes=1024), provider=FakeProvider(data=reading()), renderer=FakeRenderer()))
     response = send(client, CHAT.encode() * 20)
     assert (response.status_code, response.json()["error"]["code"]) == (413, "file_too_large")
+
+
+# -- what the person reads: never the transcript's keys ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("quote", "cleaned"),
+    [
+        ("[m3] p1 · 10:41 · ₦23,000 is my final price.", "₦23,000 is my final price."),
+        ("[m3] ₦23,000 is my final price.", "₦23,000 is my final price."),
+        ("p2 · 10:42 · Okay, I'll take it.", "Okay, I'll take it."),
+        ("[m7] p1 · 2:05 PM · How much?", "How much?"),
+        ('p1: "Tola\'s Bags"', "Tola's Bags"),
+        ('- p2: "Ada Obi" (the phone\'s owner, who exported this chat)', "Ada Obi"),
+        ("--- 2026-11-18 ---", "2026-11-18"),
+        ("₦23,000 is my final price.", "₦23,000 is my final price."),
+    ],
+)
+def test_evidence_quotes_lose_the_transcripts_markup(quote: str, cleaned: str) -> None:
+    assert clean_quote(quote) == cleaned
+
+
+def test_notes_name_people_and_place_messages_by_their_time() -> None:
+    export = read_chat_export(CHAT.encode(), "WhatsApp Chat with Tola's Bags.txt", max_text_bytes=10**6, max_file_bytes=10**7)
+    assert (
+        clean_prose("p1 first asked ₦25,000 in [m1], then settled on ₦23,000 (m3).", export)
+        == "Tola's Bags first asked ₦25,000 in the message at 10:38, then settled on ₦23,000."
+    )
+    assert clean_prose("See message m4: p2 accepted.", export) == "See the message at 10:42: Ada Obi accepted."
+    assert clean_prose("5 m3 of sand", export) == "5 m3 of sand"  # a measurement, not a message
+
+
+def test_an_answer_quoting_the_transcript_reads_cleanly_on_the_page() -> None:
+    marked = {
+        **reading(),
+        "seller": field("p1", quote='p1: "Tola\'s Bags"'),
+        "line_items": [line_item("Brown leather tote", "1", "23000", quote="[m3] p1 · 10:41 · ₦23,000 is my final price.")],
+        "transaction_date": field("2026-11-18", quote="--- 2026-11-18 ---"),
+        "summary": "p2 bought a tote from p1 (m3, m4).",
+        "ambiguities": [{"field": "amount_paid", "description": "In [m6] p1 says ₦25,000 arrived, but the price agreed in [m3] is lower."}],
+    }
+    body = send(client_with(FakeProvider(data=marked)), CHAT.encode()).json()
+    assert body["draft"]["seller"] == "Tola's Bags"
+    assert body["field_meta"]["line_items.item-1"]["evidence"][0]["quote"] == "₦23,000 is my final price."
+    assert body["field_meta"]["transaction_date"]["evidence"][0]["quote"] == "2026-11-18"
+    assert body["summary"] == "Ada Obi bought a tote from Tola's Bags."
+    assert "In the message at 08:06 Tola's Bags says ₦25,000 arrived, but the price agreed in the message at 10:41 is lower." in [
+        reason["message"] for reason in body["review_reasons"]
+    ]
 
 
 def test_a_provider_failure_says_so_in_terms_of_the_chat() -> None:

@@ -157,6 +157,8 @@ class Parties(BaseModel):
     other_party: str = ""
     # Digits of the other side's number, when the conversation shows it.
     other_phone: str = ""
+    # The other side's WhatsApp username (lower case, no "@"), when the chat shows one instead of a number.
+    other_username: str = ""
     people: list[Person] = Field(default_factory=list)
 
 
@@ -206,6 +208,9 @@ class ExtractionResponse(BaseModel):
     calculation: Calculation
     # The day label ("today", "yesterday", a weekday) the transaction date was worked out from, if any.
     date_label: str = ""
+    # The reference or session ID printed on a bank transfer receipt in the screenshots, in upper-case
+    # letters and digits only. Empty when there's no receipt or no readable reference.
+    payment_reference: str = ""
     screenshots: int
     images_sent: int
 

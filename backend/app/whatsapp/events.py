@@ -4,11 +4,13 @@ Call this only after the delivery's signature has been verified. Anything malfor
 rather than raised: retrying a delivery can't repair it, so it must not block the rest of the batch.
 
 The customer's identity is Meta's business-scoped user ID (``from_user_id``). The phone number
-(``from``) is optional: Meta leaves it out for people who use a WhatsApp username.
+(``from``) is optional: Meta leaves it out for people who use a WhatsApp username, and sends the
+username instead (``contacts[].profile.username``, without an "@"). The username is only shown.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -24,6 +26,8 @@ CHAT_EXPORT_TYPES = frozenset(
     {"text/plain", "application/zip", "application/x-zip-compressed", "application/x-zip", "application/zip-compressed", "multipart/x-zip"}
 )
 CHAT_EXPORT_SUFFIXES = (".txt", ".zip")
+# WhatsApp usernames: 3 to 35 letters, digits, periods and underscores.
+USERNAME = re.compile(r"^[A-Za-z0-9._]{3,35}$")
 
 
 @dataclass(frozen=True)
@@ -32,6 +36,8 @@ class Sender:
     phone: str | None
     # The name on the person's WhatsApp profile, offered as their name on receipts. Not an identity.
     profile_name: str = ""
+    # Their WhatsApp username, for people who have one. Shown, never used to grant access.
+    username: str = ""
 
 
 @dataclass(frozen=True)
@@ -119,7 +125,9 @@ def _sender(raw: dict[str, Any], contacts: list[dict[str, Any]]) -> Sender | Non
     only = contacts[0] if len(contacts) == 1 else {}
     user_id = _token(raw.get("from_user_id")) or _token(only.get("user_id")) or None
     phone = _phone(raw.get("from")) or _phone(only.get("wa_id"))
-    return Sender(user_id=user_id, phone=phone, profile_name=_profile_name(only)) if user_id or phone else None
+    if not (user_id or phone):
+        return None
+    return Sender(user_id=user_id, phone=phone, profile_name=_profile_name(only), username=_username(only))
 
 
 def is_chat_export(mime_type: str, filename: str) -> bool:
@@ -141,6 +149,12 @@ def _profile_name(contact: dict[str, Any]) -> str:
         return ""
     cleaned = " ".join("".join(character for character in name if character.isprintable()).split())
     return cleaned[:120]
+
+
+def _username(contact: dict[str, Any]) -> str:
+    value = _dict(contact.get("profile")).get("username")
+    text = value.strip().removeprefix("@") if isinstance(value, str) else ""
+    return text if USERNAME.match(text) else ""
 
 
 def _read_message(raw: dict[str, Any], contacts: list[dict[str, Any]], parsed: ParsedWebhook) -> None:

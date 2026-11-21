@@ -12,7 +12,7 @@ The database tests start a private PostgreSQL on a free port from the installed 
 (or use `TEST_DATABASE_URL`) and never touch a real database. No test calls a real AI provider, Meta or
 any other external service: providers, WhatsApp and webhook receivers are replaced by scripted fakes.
 
-Latest full run, 2026-11-21: **749 passed** in 2 min 47 s. The slowest step is starting the private
+Latest full run, 2026-11-21: **785 passed** in 3 min 20 s. The slowest step is starting the private
 database (about 10 s); one test prints a real PDF and PNG with Chromium.
 
 | File | What it covers |
@@ -27,6 +27,7 @@ database (about 10 s); one test prints a real PDF and PNG with Chromium.
 | `test_engine_security.py` | Tenant isolation in the database, authentication, upload attacks, injection, erasure |
 | `test_whatsapp_*.py` | The WhatsApp channel against a fake Cloud API: conversation, corrections, receipts, privacy |
 | `test_whatsapp_identity.py`, `test_parties.py` | Who is who: the customer's name and side, remembered contacts, conflicts, payers, money owed by side; chat exports sent as documents, "deal N", clear history, yes/no in context |
+| `test_whatsapp_trust.py` | Payment checks, reused transfer receipts, the other person's confirmation link, WhatsApp usernames, messages per receipt |
 | `test_chat_import.py`, `test_chat_export_api.py` | WhatsApp chat exports: Android and iPhone formats, owners, photos in ZIPs, unsafe archives, `POST /api/extractions/chat` |
 | `test_client_address.py`, `test_api_session_tool.py` | Rate-limit addresses behind a proxy; the operator session tool |
 | `test_intelligence_eval.py` | The evaluation itself: dataset rules, the split, scoring, reports, the runner, prompt leakage |

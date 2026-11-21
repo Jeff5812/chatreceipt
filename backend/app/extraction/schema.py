@@ -145,6 +145,11 @@ EXTRACTION_SCHEMA: dict[str, Any] = _object(
         "delivery_fee": _field(_AMOUNT, "Delivery, shipping or dispatch charge."),
         "agreed_total": _field(_AMOUNT, "A total stated explicitly in the conversation."),
         "amount_paid": _field(_AMOUNT, "An amount the conversation says was paid."),
+        "payment_reference": _field(
+            _STRING,
+            "The reference, session ID or transaction ID printed on a bank transfer receipt in the screenshots, "
+            "copied exactly. Empty when there is no receipt or no reference on it.",
+        ),
         "outstanding_amount": _field(_AMOUNT, "A balance stated explicitly in the conversation."),
         "payment_status": _field(
             {"type": "string", "enum": list(PAYMENT_STATUS_VALUES)},
@@ -242,6 +247,7 @@ class AIExtraction(_AIModel):
     delivery_fee: AIField
     agreed_total: AIField
     amount_paid: AIField
+    payment_reference: AIField = Field(default_factory=_not_found)
     outstanding_amount: AIField
     payment_status: AIField
     payment_terms: AIField

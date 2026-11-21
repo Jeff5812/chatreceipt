@@ -52,7 +52,7 @@ from app.models import (
     ReviewReason,
     TransactionDraft,
 )
-from app.names import phone_in_label, same_name
+from app.names import phone_in_label, same_name, username_in_label
 from app.observability import log_event
 from app.uploads import PreparedImage
 
@@ -299,6 +299,22 @@ class _Mapper:
                 self.reason(key, f"Check {label}. The conversation doesn't state it clearly.")
 
 
+_UNSTATED = re.compile(
+    r"\b(?:not|never|isn't|wasn't|aren't|no)\b[^.]{0,40}?\b(?:stated|mentioned|given|specified|provided|said|shown|written|explicit(?:ly)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _only_says_unstated(field: str, message: str, ai: AIExtraction) -> bool:
+    """A doubt that only says the chat doesn't state a total or balance, which ChatReceipt adds up anyway.
+
+    It would make the person tick "I've checked" for nothing. A doubt that quotes a figure, or one
+    about a total the chat did state, is kept: that's where conflicting figures are reported.
+    """
+    stated = {"agreed_total": ai.agreed_total, "outstanding_amount": ai.outstanding_amount}.get(field)
+    return stated is not None and not stated.found and not re.search(r"\d", message) and bool(_UNSTATED.search(message))
+
+
 def _has_amounts(draft: TransactionDraft) -> bool:
     adjustments = [*draft.discounts, *draft.additional_fees]
     return bool(
@@ -351,7 +367,13 @@ def build_extraction_response(
         stated_outstanding=m.amount("stated_outstanding", ai.outstanding_amount),
     )
     draft, parties = m.parties(draft, ai.owner_role, ai.other_party)
-    parties = parties.model_copy(update={"other_phone": phone_in_label(parties.other_party), "people": m.people(ai.people)})
+    parties = parties.model_copy(
+        update={
+            "other_phone": phone_in_label(parties.other_party),
+            "other_username": username_in_label(parties.other_party),
+            "people": m.people(ai.people),
+        }
+    )
     # A day label becomes a date only when we know the day the screenshot was sent, and the record
     # says where the date came from so the person can catch an old screenshot.
     date_label = ai.date_label.strip().lower() if ai.date_label.strip().lower() in DAY_LABELS[1:] else ""
@@ -368,7 +390,7 @@ def build_extraction_response(
 
     for ambiguity in ai.ambiguities[:20]:
         message = clean_text(ambiguity.description, 300)
-        if message:
+        if message and not _only_says_unstated(ambiguity.field, message, ai):
             m.reason(AMBIGUITY_TARGETS.get(ambiguity.field), message)
     # Amounts without a currency can't be checked or exported; say so plainly instead of leaving
     # only a form error, unless the model already explained it.
@@ -398,7 +420,20 @@ def build_extraction_response(
         screenshots=screenshots,
         images_sent=images_sent,
         date_label=date_label if resolved is not None else "",
+        payment_reference=payment_reference(ai.payment_reference),
     )
+
+
+def payment_reference(field: AIField) -> str:
+    """A transfer receipt's reference in a form that can be compared: upper-case letters and digits only.
+
+    Anything too short or too long to be a reference is dropped rather than compared: a false match
+    would accuse someone of reusing a receipt.
+    """
+    if not field.found:
+        return ""
+    compact = "".join(character for character in field.value.upper() if character.isascii() and character.isalnum())
+    return compact if 6 <= len(compact) <= 40 and any(character.isdigit() for character in compact) else ""
 
 
 def parse_ai_answer(data: object) -> AIExtraction:

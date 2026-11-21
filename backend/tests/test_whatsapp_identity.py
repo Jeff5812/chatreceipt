@@ -336,7 +336,9 @@ def test_a_chat_export_sent_as_a_document_becomes_a_draft_with_the_other_person_
     channel, provider = setup(export_reading())
     send_export(channel, "doc-1", CHAT.encode())
     said = channel.graph.everything_said()
-    assert "Your chat is sent to our AI provider to be read" in said and "Got your chat export" in said
+    # A first message gets one note that says the export is being read, not a second "Got it".
+    assert "I'm reading your chat export now" in said and "Your chat is sent to our AI provider to be read" in said
+    assert "Got your chat export" not in said
     [request] = provider.requests
     text = "\n".join(part.text for part in request.parts if hasattr(part, "text"))
     assert '"Ada Obi" (the phone\'s owner, who exported this chat)' in text and provider.calls == []
@@ -392,6 +394,7 @@ def test_an_unsafe_zip_is_refused_and_nothing_is_read(setup: Any) -> None:
         archive.writestr("../../escape.txt", CHAT)
     send_export(channel, "doc-1", buffer.getvalue(), "WhatsApp Chat with Tola's Bags.zip", mime_type="application/zip")
     assert "unsafe names" in channel.graph.last_body() and "Nothing was saved" in channel.graph.last_body()
+    assert channel.graph.offered() == {"Send screenshots", "Get help"}  # reading the same file again can't help
     assert provider.requests == [] and saved(channel) == []
 
 
@@ -426,6 +429,33 @@ def test_screenshots_are_never_mixed_into_a_chat_export(setup: Any) -> None:
     channel.tap(ALICE, "Keep this draft")
     assert "keeping this draft" in channel.graph.last_body()
     assert channel.rows("SELECT held_images FROM chatreceipt.whatsapp_submissions WHERE status = 'awaiting_confirmation'")[0]["held_images"] == []
+
+
+def test_messages_while_an_export_is_read_talk_about_the_chat_not_a_screenshot(setup: Any) -> None:
+    channel, _ = setup(export_reading())
+    channel.say(ALICE, "hi")
+    channel.graph.add_image("doc-1", CHAT.encode(), mime_type="text/plain")
+    channel.deliver(channel._message(ALICE, "document", document={"id": "doc-1", "mime_type": "text/plain", "filename": EXPORT_NAME}))
+    channel.deliver(channel.text_event(ALICE, "hello"))  # before the export has been read
+    channel.work()
+    said = channel.graph.everything_said()
+    assert "Hi again 👋 I'm still reading your chat export." in said and "reading your screenshot" not in said
+
+
+def test_their_own_name_in_an_export_is_marked_as_theirs(setup: Any) -> None:
+    channel, _ = setup(export_reading(buyer=field("Ada Obi", quote="Okay, I'll take it.")))
+    send_export(channel, "doc-1", CHAT.encode())
+    assert "*Buyer:* Ada Obi _(you)_" in latest_draft(channel)
+    assert "Send *deal" not in latest_draft(channel)  # no other deals, so no deal hint
+    channel.tap(ALICE, "Confirm")
+    assert saved(channel)[0]["buyer"] == "Ada Obi"  # their side was named, so nothing was asked
+
+
+def test_one_other_deal_is_offered_as_deal_1_alone(setup: Any) -> None:
+    deals = [{"summary": "A black clutch for ₦12,000, 2 November", "last_message": "m1"}]
+    channel, _ = setup(export_reading(other_deals=deals))
+    send_export(channel, "doc-1", CHAT.encode())
+    assert "Send *deal 1* for a receipt of it." in latest_draft(channel)
 
 
 def test_screenshots_and_exports_share_the_reading_limits(setup: Any) -> None:

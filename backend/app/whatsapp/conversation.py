@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Sequence
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -38,10 +38,12 @@ from app.whatsapp.summary import (
     draft_messages,
     open_reasons,
     payment_line,
+    payment_question,
     question_messages,
     ready_to_save,
     receipt_caption,
     recent_text,
+    responder_view,
     saved_text,
     money,
     next_step,
@@ -68,20 +70,22 @@ WELCOME = (
     "Send *delete my data* any time to remove your records._"
 )
 FIRST_IMAGE_NOTE = (
-    "Hi, I'm *ChatReceipt* 👋 _Your screenshot is sent to our AI provider to be read, and ChatReceipt doesn't keep "
-    "the image. You check everything before a record is saved. Send *delete my data* any time to remove your records._"
+    "Hi, I'm *ChatReceipt* 👋 I'm reading your screenshot now.\n\n_Your screenshot is sent to our AI provider to be "
+    "read, and ChatReceipt doesn't keep the image. You check everything before a record is saved. Send *delete my data* "
+    "any time to remove your records._"
 )
 ASK_FOR_IMAGE = "Send me a screenshot of the chat or payment. If it runs across several screenshots, send them together."
 ACKNOWLEDGE = "📥 Got it. I'm reading your screenshot now."
 READING_AGAIN = "🔄 Reading your screenshot again now."
 STILL_READING = "I'm still reading your screenshot. I'll send the details here as soon as they're ready."
+STILL_READING_EXPORT = "I'm still reading your chat export. I'll send the details here as soon as they're ready."
 WELCOME_BACK = "Hi again 👋 Your draft from earlier isn't saved yet. Do you want to continue it, or start a new one?"
-WELCOME_BACK_READING = "Hi again 👋 " + STILL_READING
 HELP = (
     "*How ChatReceipt works*\n"
-    "1. Send a screenshot of a chat or a payment, or export the chat (in the chat, tap ⋮ › More › Export chat) and send me the file.\n"
+    "1. Send a screenshot of a chat or a payment, or export the chat and send me the file "
+    "(Android: in the chat, tap ⋮ › More › Export chat. iPhone: tap the name at the top › Export Chat).\n"
     "2. Check what I found. To fix anything, just tell me, like “the price is 20k” or “he still owes 40k”.\n"
-    "3. Tap *Confirm* and I'll send you the receipt.\n\n"
+    "3. Tap *Confirm* and forward the receipt: the other person can confirm it with one tap.\n\n"
     "*You can also send*\n"
     "• *show* to see your whole draft\n"
     "• *try again* to read the screenshot again\n"
@@ -118,8 +122,9 @@ READING_EXPORT_AGAIN = "🔄 Reading your chat export again now."
 SCREENSHOTS_HELD_PROMPT = "You have a draft from a chat export waiting. Should I start a new record from these screenshots?"
 KEEPING_DRAFT = "Okay, keeping this draft."
 FIRST_EXPORT_NOTE = (
-    "Hi, I'm *ChatReceipt* 👋 _Your chat is sent to our AI provider to be read, and ChatReceipt doesn't keep the "
-    "file. You check everything before a record is saved. Send *delete my data* any time to remove your records._"
+    "Hi, I'm *ChatReceipt* 👋 I'm reading your chat export now.\n\n_Your chat is sent to our AI provider to be read, "
+    "and ChatReceipt doesn't keep the file. You check everything before a record is saved. Send *delete my data* any "
+    "time to remove your records._"
 )
 READING_DEAL = "📥 Reading the chat again for this deal: {deal}"
 NO_SUCH_DEAL = "There's no deal {number} in your last chat export."
@@ -135,15 +140,16 @@ CLEAR_KEPT = "Nothing was cleared."
 WHAT_TO_CHANGE = "No problem. Tell me what's wrong in your own words, like “the buyer is Emeka” or “he paid 20k”, or pick from the list."
 NOTHING_OPEN = "There's no draft to work on right now. Send a screenshot to start one."
 NOTHING_TO_RETRY = "There's nothing to read again right now. Send the screenshot and I'll read it."
-DRAFT_GONE = "That draft is no longer available. Send the screenshot again to start a new one."
+DRAFT_GONE = "That draft is no longer available. Send the screenshot or chat export again to start a new one."
 CANCELLED = "Cancelled. Nothing was saved."
 STARTED_OVER = "Okay, I've cleared that draft. Send me the next screenshot."
 SLOW_DOWN = "You're sending messages very quickly, so I'll pause for a minute before replying."
-IMAGE_LIMIT = "You've reached the limit for screenshots for now. Please try again later."
+IMAGE_LIMIT = "You've reached the limit for screenshots and chat exports for now. Please try again later."
 TOO_MANY_IMAGES = "I can read up to {limit} screenshots at a time. I'll work with the first {limit}."
 HELD_PROMPT = "You have a draft waiting. Should these screenshots be added to it, or start a new record?"
 HELD_EDIT_WARNING = " Adding them means reading the draft again, so your edits to it will be lost."
 REREAD_PROMPT = "Read the screenshot again from the start? Your corrections to this draft will be lost."
+REREAD_EXPORT_PROMPT = "Read the chat export again from the start? Your corrections to this draft will be lost."
 DIDNT_CATCH = "I didn't catch what to change. You can say things like “the price is 20k” or “he still owes 40k”."
 NOT_UNDERSTOOD_NOW = "I couldn't work that out just now. Tell me again in a moment, or tap *Correct* to choose what to change."
 ERASE_PROMPT = (
@@ -153,6 +159,31 @@ ERASE_PROMPT = (
 ASK_DATE = "📅 *What date was this?* It goes on the receipt.\nTap one, or type a date like *10 Nov*."
 ERASED = "Your records and details have been deleted. Send a message any time to start again."
 ERASE_KEPT = "Nothing was deleted."
+# Payment checks: the chat's word that money was paid isn't the money.
+PAYMENT_RECEIVED = "✅ Noted: {amount} reached your account for *{reference}*."
+PAYMENT_MISSING = (
+    "Okay. *{reference}* now shows {amount} as *not in your account yet*. Don't hand anything over until it arrives.\n\n"
+    "Tap below when it does."
+)
+NOTHING_TO_CHECK = "There's no payment to check on that record."
+# The other person's confirmation, through the link on a receipt.
+CODE_NOT_FOUND = "I couldn't find that record. Check the link you were sent, or ask the person who sent it."
+OWN_RECORD = "That's the link for your own record *{reference}*. Forward the receipt to the other person so they can confirm it."
+ALREADY_CONFIRMED = "You've already confirmed *{reference}* 👍"
+THANKS_CONFIRMED = (
+    "✅ Thanks. I've told {owner} you confirmed *{reference}*.\n\n"
+    "_You can keep your own records too: send me a screenshot of any deal and I'll make the receipt._"
+)
+WHATS_WRONG = "What isn't right about *{reference}*? Tell me in one message, like “I paid 15k, not 10k”."
+THANKS_DISPUTED = "Thanks. I've sent that to {owner}, so you can sort it out together."
+AGREED_NOTICE = "✅ *{who}* confirmed your record *{reference}*."
+DISPUTED_NOTICE = (
+    "⚠️ *{who}* says something's wrong with *{reference}*:\n“{note}”\n\n"
+    "Talk to them. If the record needs changing, send the corrected screenshots and save a new one."
+)
+# How long a "Something's wrong" tap waits for the message saying what.
+DISPUTE_WAIT = timedelta(hours=1)
+_CONFIRM_CODE = re.compile(r"^\s*confirm\s+([0-9a-z]{10})\s*[.!]*\s*$", re.IGNORECASE)
 
 MAX_REMEMBERED = 4
 _GREETINGS = frozenset({"hi", "hello", "hey", "hiya", "hola", "greetings", "good", "start", "menu"})
@@ -223,6 +254,43 @@ def command_of(text: str) -> str:
     return "greeting" if first in _GREETINGS else ""
 
 
+def confirm_code_in(text: str) -> str:
+    """The code in "CONFIRM K7Q2M9XWAB", the message a receipt's confirmation link writes, or ""."""
+    found = _CONFIRM_CODE.match(text or "")
+    return found.group(1).upper() if found else ""
+
+
+def other_side(draft: TransactionDraft, owner_role: str | None) -> str:
+    """The name on the side of a record that isn't the customer's, when their side is known."""
+    if owner_role == "seller":
+        return draft.buyer.strip()
+    if owner_role == "buyer":
+        return draft.seller.strip()
+    return ""
+
+
+def owner_name(record: Row) -> str:
+    """How the person who saved a record is named to the other person: their side's name, or their own."""
+    role = record.get("owner_role")
+    if role in parties.ROLES and str(record.get(role) or "").strip():
+        return clean_name(str(record[role]), 60)
+    return clean_name(str(record.get("owner_party_name") or record.get("owner_whatsapp_name") or ""), 60)
+
+
+def responder_label(customer: Row) -> str:
+    """Who answered a record, as WhatsApp identified them: their profile name and their number or username."""
+    name = clean_name(str(customer.get("whatsapp_name") or ""), 60)
+    if customer.get("whatsapp_phone"):
+        handle = f"+{customer['whatsapp_phone']}"
+    elif customer.get("whatsapp_username"):
+        handle = f"@{customer['whatsapp_username']}"
+    else:
+        handle = ""
+    if name and handle:
+        return f"{name} ({handle})"
+    return name or handle or "The other person"
+
+
 def draft_of(submission: Row) -> TransactionDraft:
     return TransactionDraft.model_validate(submission["draft"])
 
@@ -246,6 +314,8 @@ class Turn:
         self.understanding = understanding
         # The conversation before the message being handled, set by on_text.
         self.earlier: list[str] = []
+        # This is the customer's first message to ChatReceipt (set by handle_inbound).
+        self.first_contact = False
         self._sent = 0
 
     @property
@@ -449,7 +519,7 @@ class Turn:
                 ChoiceRow(
                     id=reply_id(action, arg=str(row["id"])),
                     title=row["reference"],
-                    description=" · ".join(part for part in (row["buyer"] or row["seller"], money(row["total"], get_currency(row["currency"]))) if part),
+                    description=" · ".join(part for part in (assistant.other_party(row, ""), money(row["total"], get_currency(row["currency"]))) if part),
                 )
                 for row in rows
             ]
@@ -466,14 +536,20 @@ class Turn:
             return
         if fmt in ("image", "both"):
             draft = TransactionDraft.model_validate(record["draft"])
-            self.send(receipt_request(str(record["id"]), "png", receipt_caption(record["reference"], draft)))
+            if not record.get("confirm_code"):
+                # Saved before records had codes: it gets one now, so its receipt carries the link too.
+                record = {**record, "confirm_code": store.ensure_confirm_code(self.conn, self.customer["id"], record["id"])}
+            caption = receipt_caption(
+                record["reference"], draft, confirm_link=self._confirm_link(record), other_name=other_side(draft, record.get("owner_role"))
+            )
+            self.send(receipt_request(str(record["id"]), "png", caption))
         if fmt in ("pdf", "both"):
             self.send_pdf(str(record["id"]))
 
     def welcome_back(self, submission: Row) -> None:
         """A greeting while a draft is open: say hello and let them pick up the draft or start over."""
         if submission["status"] != "awaiting_confirmation":
-            self.say(WELCOME_BACK_READING)
+            self.say("Hi again 👋 " + _still_reading(submission))
             return
         self.send(
             button_message(
@@ -538,14 +614,29 @@ class Turn:
             self.send(message)
 
     def start_submission(self, images: list[dict[str, str]]) -> None:
-        """Start reading: screenshots wait briefly for the rest of an album, a chat export starts at once."""
+        """Start reading: screenshots wait briefly for the rest of an album, a chat export starts at once.
+
+        Only someone who hasn't saved a record yet is told "I'm reading it now". Everyone sees WhatsApp's
+        typing indicator while it's read, and since October 2026 every reply costs money, so a customer
+        who knows the routine isn't sent a message that only says what the indicator already shows.
+        """
         export = next((entry for entry in images if entry.get("kind") == "chat_export"), None)
         if export is not None:
             store.create_submission(self.conn, self.customer["id"], [export], wait_seconds=0)
-            self.say(READING_DEAL.format(deal=export["focus"]) if export.get("focus") else EXPORT_ACKNOWLEDGE)
+            if export.get("focus"):
+                self.say(READING_DEAL.format(deal=export["focus"]))
+            elif self._announce():
+                self.say(EXPORT_ACKNOWLEDGE)
             return
         store.create_submission(self.conn, self.customer["id"], images, wait_seconds=self.settings.whatsapp_album_wait_seconds)
-        self.say(ACKNOWLEDGE)
+        if self._announce():
+            self.say(ACKNOWLEDGE)
+
+    def _announce(self) -> bool:
+        """Whether to say "I'm reading it now": not on a first contact (its note says so), nor to a regular."""
+        if self.first_contact:
+            return False
+        return not store.record_counts(self.conn, self.customer["id"])["records"]
 
     def _start_held(self, submission: Row) -> None:
         if submission["held_images"]:
@@ -618,6 +709,9 @@ class Turn:
             self._ask_date(submission, note=note)
             return
         state = parties.state_of(submission["review"])
+        owner_role = state.get("owner_role") or None
+        # Money the chat says was paid to the customer is only a claim until they say it arrived.
+        paid_to_them = owner_role == "seller" and computation.amount_paid is not None and computation.amount_paid > 0
         record = store.save_transaction(
             self.conn,
             customer=self.customer,
@@ -628,7 +722,9 @@ class Turn:
             total=computation.total,
             amount_paid=computation.amount_paid,
             outstanding=computation.outstanding,
-            owner_role=state.get("owner_role") or None,
+            owner_role=owner_role,
+            payment_check="claimed" if paid_to_them else None,
+            payment_reference=str((submission["review"] or {}).get("payment_reference") or "") or None,
         )
         store.update_submission(self.conn, submission["id"], status="confirmed", pending_edit=None, held_images=[], instruction=None, dialogue=[])
         self._remember_counterpart(draft, state)
@@ -637,14 +733,135 @@ class Turn:
             owner_role=state.get("owner_role") or "unknown", saved_name_used=bool(state.get("you")),
             corrected=any(path in submission["edited_fields"] for path in parties.ROLES),
         )
-        self.send(receipt_request(str(record["id"]), "png", receipt_caption(record["reference"], draft)))
+        other = other_side(draft, owner_role)
+        link = self._confirm_link(record)
+        self.send(receipt_request(str(record["id"]), "png", receipt_caption(record["reference"], draft, confirm_link=link, other_name=other)))
+        saved = saved_text(record["reference"], other_name=other, confirm_link=bool(link))
+        body = f"{note}\n\n{saved}" if note else saved
+        record_id = str(record["id"])
+        if record.get("payment_check") == "claimed":
+            # The question rides on the "Saved" message: one message fewer than asking separately.
+            body = f"{body}\n\n{payment_question(money(computation.amount_paid, get_currency(draft.currency)), other)}"
+            buttons = [
+                (reply_id("pchk", arg=f"{record_id}:received"), "Yes, it's arrived"),
+                (reply_id("pchk", arg=f"{record_id}:not_received"), "Not yet"),
+                (reply_id("pdf", arg=record_id), "Get PDF"),
+            ]
+        else:
+            buttons = [(reply_id("pdf", arg=record_id), "Get PDF"), (reply_id("menu", arg="scan"), "Scan another"), (reply_id("menu", arg="recent"), "Recent records")]
+        self.send(button_message(body, buttons))
+        self._start_held(submission)
+
+    def _confirm_link(self, record: Row) -> str:
+        """The wa.me link on a receipt that lets the other person confirm it, when ChatReceipt's number is set."""
+        number, code = self.settings.whatsapp_link_number, record.get("confirm_code") or ""
+        return f"https://wa.me/{number}?text=CONFIRM%20{code}" if number and code else ""
+
+    # -- payment checks ------------------------------------------------------------------------
+
+    def payment_answer(self, arg: str) -> None:
+        """The customer's answer to "Has it reached your account?" on one of their own records."""
+        record_id, _, state = arg.partition(":")
+        try:
+            transaction_id = UUID(record_id)
+        except ValueError:
+            self.say(RECORD_GONE)
+            return
+        if state not in ("received", "not_received"):
+            self.say(RECORD_GONE)
+            return
+        record = store.set_payment_check(self.conn, self.customer["id"], transaction_id, state)
+        if record is None:
+            exists = store.get_transaction(self.conn, self.customer["id"], transaction_id) is not None
+            self.say(NOTHING_TO_CHECK if exists else RECORD_GONE)
+            return
+        amount = money(record["amount_paid"], get_currency(record["currency"]))
+        if state == "received":
+            self.say(PAYMENT_RECEIVED.format(amount=amount, reference=record["reference"]))
+        else:
+            self.send(button_message(PAYMENT_MISSING.format(amount=amount, reference=record["reference"]), [(reply_id("pchk", arg=f"{record_id}:received"), "It's arrived")]))
+        log_event("whatsapp.payment_checked", state=state)
+
+    # -- the other person's confirmation (the link on a receipt) ---------------------------------
+
+    def on_confirm_code(self, code: str) -> None:
+        """Someone opened a receipt's confirmation link: show them that record, and only that one."""
+        record = store.record_by_code(self.conn, code)
+        if record is None:
+            self.say(CODE_NOT_FOUND)
+            return
+        if record["customer_id"] == self.customer["id"]:
+            self.say(OWN_RECORD.format(reference=record["reference"]))
+            return
         self.send(
             button_message(
-                f"{note}\n\n{saved_text(record['reference'])}" if note else saved_text(record["reference"]),
-                [(reply_id("pdf", arg=str(record["id"])), "Get PDF"), (reply_id("menu", arg="scan"), "Scan another"), (reply_id("menu", arg="recent"), "Recent records")],
+                responder_view(record, owner_name(record) or "Someone", first_contact=self.first_contact),
+                [(reply_id("ack", arg=f"{code}:agreed"), "Yes, it's right"), (reply_id("ack", arg=f"{code}:disputed"), "Something's wrong")],
             )
         )
-        self._start_held(submission)
+        log_event("whatsapp.record_opened", first_contact=self.first_contact)
+
+    def answer_record(self, code: str, response: str) -> None:
+        record = store.record_by_code(self.conn, code)
+        if record is None:
+            self.say(CODE_NOT_FOUND)
+            return
+        if record["customer_id"] == self.customer["id"]:
+            self.say(OWN_RECORD.format(reference=record["reference"]))
+            return
+        reference = record["reference"]
+        if response != "agreed":
+            until = (datetime.now(UTC) + DISPUTE_WAIT).isoformat()
+            store.set_awaiting(self.conn, self.customer["id"], {"kind": "dispute", "code": code, "until": until})
+            self.say(WHATS_WRONG.format(reference=reference))
+            return
+        if (self.customer.get("awaiting") or {}).get("kind") == "dispute":
+            # They tapped "Something's wrong" first and changed their mind: their next message is an ordinary one.
+            store.set_awaiting(self.conn, self.customer["id"], None)
+        latest = store.latest_response(self.conn, record["id"], responder_id=self.customer["id"])
+        if latest is not None and latest["response"] == "agreed":
+            self.say(ALREADY_CONFIRMED.format(reference=reference))
+            return
+        store.add_response(self.conn, record["id"], self.customer, "agreed")
+        self.say(THANKS_CONFIRMED.format(owner=owner_name(record) or "them", reference=reference))
+        self._tell_owner(record, AGREED_NOTICE.format(who=responder_label(self.customer), reference=reference))
+        log_event("whatsapp.record_answered", response="agreed")
+
+    def _dispute_note(self, text: str) -> bool:
+        """The message after "Something's wrong": what the person says is wrong, passed to the record's owner."""
+        awaiting = self.customer.get("awaiting") or {}
+        if awaiting.get("kind") != "dispute":
+            return False
+        store.set_awaiting(self.conn, self.customer["id"], None)
+        try:
+            expired = datetime.fromisoformat(str(awaiting.get("until"))) < datetime.now(UTC)
+        except ValueError:
+            expired = True
+        if expired:
+            return False
+        if normalise(text) in _BACK | {"stop", "never mind", "nevermind", "nothing"}:
+            self.say("Okay, I haven't sent anything.")
+            return True
+        if command_of(text):
+            return False  # a command is handled as usual
+        record = store.record_by_code(self.conn, str(awaiting.get("code") or ""))
+        if record is None or record["customer_id"] == self.customer["id"]:
+            return False
+        note = " ".join(text.split())[:500]
+        store.add_response(self.conn, record["id"], self.customer, "disputed", note=note)
+        self.say(THANKS_DISPUTED.format(owner=owner_name(record) or "them"))
+        self._tell_owner(
+            record, DISPUTED_NOTICE.format(who=responder_label(self.customer), reference=record["reference"], note=note[:300])
+        )
+        log_event("whatsapp.record_answered", response="disputed")
+        return True
+
+    def _tell_owner(self, record: Row, text: str) -> None:
+        """A message to the person who saved the record. Without an open chat window WhatsApp may not deliver it;
+        the answer is on their record either way."""
+        owner = store.customer_contact(self.conn, record["customer_id"])
+        if owner is not None:
+            store.enqueue(self.conn, owner, text_message(text), f"{self.key}:owner")
 
     def _ask_date(self, submission: Row, *, note: str = "") -> None:
         """One question with one-tap answers, instead of saving a receipt with no date."""
@@ -687,7 +904,7 @@ class Turn:
             counterparty_id = None
         store.remember_counterparty(
             self.conn, self.customer["id"], name=remembered["name"], phone=remembered["phone"], label=remembered["label"],
-            role=remembered["role"], counterparty_id=counterparty_id,
+            role=remembered["role"], counterparty_id=counterparty_id, username=remembered.get("username") or "",
         )
 
     def _ask_about_parties(self, submission: Row, draft: TransactionDraft) -> bool:
@@ -880,7 +1097,7 @@ class Turn:
         if submission is None:
             self.say(ASK_FOR_IMAGE)
         elif submission["status"] in ("collecting", "processing"):
-            self.say(STILL_READING)
+            self.say(_still_reading(submission))
         else:
             self.cancel(submission, reply=STARTED_OVER)
 
@@ -895,11 +1112,11 @@ class Turn:
             self.say(READING_EXPORT_AGAIN if _has_export(failed["images"]) else READING_AGAIN)
             return
         if submission["status"] != "awaiting_confirmation":
-            self.say(STILL_READING)
+            self.say(_still_reading(submission))
             return
         if submission["edited_fields"]:
             sid, revision = str(submission["id"]), submission["revision"]
-            self.send(button_message(REREAD_PROMPT, [(reply_id("reread", sid, revision, "yes"), "Read it again"), (reply_id("reread", sid, revision, "no"), "Keep my draft")]))
+            self.send(button_message(REREAD_EXPORT_PROMPT if _has_export(submission["images"]) else REREAD_PROMPT, [(reply_id("reread", sid, revision, "yes"), "Read it again"), (reply_id("reread", sid, revision, "no"), "Keep my draft")]))
             return
         self._reread(submission)
 
@@ -1025,6 +1242,8 @@ class Turn:
         # The conversation before this message, for reading it in context; then this message joins it.
         self.earlier = [f"{line['who']}: {line['text']}" for line in store.recent_memory(self.customer)]
         store.remember(self.conn, self.customer["id"], "You", text)
+        if self._dispute_note(text):
+            return
         submission = store.open_submission(self.conn, self.customer["id"])
         command = command_of(text)
         awaiting = submission is not None and submission["status"] == "awaiting_confirmation"
@@ -1085,7 +1304,7 @@ class Turn:
                 # Read by the AI outside this transaction; answered through finish_request.
                 store.queue_request(self.conn, self.customer["id"], text, self.message_id, has_draft=False, earlier=self.earlier)
         elif submission["status"] != "awaiting_confirmation":
-            self.say(STILL_READING)
+            self.say(_still_reading(submission))
         elif self._answer_in_context(submission, text):
             pass
         elif command == "confirm":
@@ -1228,6 +1447,11 @@ class Turn:
             self.resend_one(reply.arg, "image")
         elif reply.action == "clear":
             self._on_clear(reply.arg)
+        elif reply.action == "pchk":
+            self.payment_answer(reply.arg)
+        elif reply.action == "ack":
+            code, _, response = reply.arg.partition(":")
+            self.answer_record(code.upper(), "agreed" if response == "agreed" else "disputed")
         else:
             self._on_draft_reply(reply)
 
@@ -1249,7 +1473,7 @@ class Turn:
             elif choice == "restart":
                 self.start_again(submission)
             elif submission["status"] != "awaiting_confirmation":
-                self.say(STILL_READING)
+                self.say(_still_reading(submission))
             else:
                 self.show_draft(submission)
         else:
@@ -1273,7 +1497,7 @@ class Turn:
             self.say(f"This record is already saved as *{saved['reference']}*." if saved else DRAFT_GONE)
             return
         if status in ("collecting", "processing"):
-            self.say(STILL_READING)
+            self.say(_still_reading(submission))
             return
         if status != "awaiting_confirmation":
             self.say(DRAFT_GONE)
@@ -1420,6 +1644,11 @@ def _has_export(images: Sequence[dict[str, Any]]) -> bool:
     return any(entry.get("kind") == "chat_export" for entry in images)
 
 
+def _still_reading(submission: Row) -> str:
+    """"Still reading", naming what is being read: the screenshots or the chat export."""
+    return STILL_READING_EXPORT if _has_export(submission["images"]) else STILL_READING
+
+
 def _focused_hash(sha256: str, deal: str) -> str:
     """A fingerprint for one deal in an export: a record of another deal isn't reported as a duplicate."""
     return hashlib.sha256(f"{sha256}|{' '.join(deal.split()).casefold()}".encode("utf-8")).hexdigest()
@@ -1493,9 +1722,14 @@ def handle_inbound(conn: Connection, settings: Settings, row: Row, *, understand
     if turn.over_limit(kind):
         return None
     first_contact = customer["welcomed_at"] is None
+    turn.first_contact = first_contact
     if first_contact:
         store.mark_welcomed(conn, customer["id"])
-    if kind == "image":
+    code = confirm_code_in(payload.get("text", "")) if kind == "text" else ""
+    if code:
+        # Someone opening a receipt's confirmation link, often their first message to ChatReceipt.
+        turn.on_confirm_code(code)
+    elif kind == "image":
         if first_contact:
             turn.say(FIRST_IMAGE_NOTE)
         turn.on_image(payload, row["message_id"])

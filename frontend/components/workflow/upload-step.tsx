@@ -158,7 +158,7 @@ export function UploadStep(props: UploadStepProps) {
           </Notice>
         )}
         {ready && !config.extraction_available && (
-          <Notice title="Reading screenshots isn't available right now">
+          <Notice title="Reading conversations isn't available right now">
             You can still enter the details yourself, or look at an example to see how ChatReceipt works.
           </Notice>
         )}

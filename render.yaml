@@ -44,6 +44,9 @@ services:
         sync: false
       - key: WHATSAPP_PHONE_NUMBER_ID
         sync: false
+      # ChatReceipt's number in international form, for the confirmation link on each receipt.
+      - key: WHATSAPP_DISPLAY_NUMBER
+        sync: false
       - key: WHATSAPP_APP_SECRET
         sync: false
       - key: WHATSAPP_VERIFY_TOKEN
