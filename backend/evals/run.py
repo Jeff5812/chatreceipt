@@ -56,6 +56,9 @@ def check(expect: dict[str, Any], result: ExtractionResponse) -> list[str]:
     for role in ("seller", "buyer"):
         if role in expect and draft.model_dump()[role].strip().lower() != expect[role].lower():
             problems.append(f"{role} is {draft.model_dump()[role]!r}, expected {expect[role]!r}")
+    # Whose phone the chat came from: "me" in the synthetic chats.
+    if "owner_role" in expect and result.parties.owner_role != expect["owner_role"]:
+        problems.append(f"owner role is {result.parties.owner_role or 'unknown'}, expected {expect['owner_role']}")
     if "line_items" in expect:
         items = list(draft.line_items)
         if len(items) != len(expect["line_items"]):

@@ -1,7 +1,15 @@
-import type { ReactNode } from "react";
+import { createContext, useContext, type ReactNode } from "react";
 import { fieldId, type FieldSource } from "@/lib/draft";
 import type { FieldMeta, Issue } from "@/lib/types";
 import { AlertIcon, ErrorIcon } from "../ui/icons";
+
+/** How an evidence source is named: "Screenshot 2", or for a chat export "Chat" and "Photo 1". */
+export const EvidenceSourceContext = createContext<(source: number) => string>((source) => `Screenshot ${source}`);
+
+/** A chat export's sources: 1 is the chat itself, and the photos sent in it follow. */
+export function chatEvidenceLabel(source: number): string {
+  return source <= 1 ? "Chat" : `Photo ${source - 1}`;
+}
 
 export function hasError(issues: Issue[]): boolean {
   return issues.some((issue) => issue.severity === "error");
@@ -40,8 +48,9 @@ export function SourceTag({ source, meta }: { source: FieldSource; meta?: FieldM
   );
 }
 
-/** Quotes from the screenshots that support a value, and the extraction's note. */
+/** Quotes from the screenshots (or the chat export) that support a value, and the extraction's note. */
 export function EvidenceList({ meta, source }: { meta?: FieldMeta; source: FieldSource }) {
+  const sourceLabel = useContext(EvidenceSourceContext);
   if (!meta || source === "manual") return null;
   const showQuotes = source === "extracted" || source === "edited";
   if (!(showQuotes && meta.evidence.length > 0) && !meta.note) return null;
@@ -50,7 +59,7 @@ export function EvidenceList({ meta, source }: { meta?: FieldMeta; source: Field
       {showQuotes &&
         meta.evidence.map((evidence) => (
           <p key={`${evidence.screenshot}-${evidence.quote}`}>
-            <span className="text-caption font-medium text-ink-soft">Screenshot {evidence.screenshot}</span> · “
+            <span className="text-caption font-medium text-ink-soft">{sourceLabel(evidence.screenshot)}</span> · “
             <span className="mark">{evidence.quote}</span>”
           </p>
         ))}
@@ -83,6 +92,7 @@ export function Field({
   meta,
   issues,
   hint,
+  tag,
   optional = false,
   children,
 }: {
@@ -92,6 +102,8 @@ export function Field({
   meta?: FieldMeta;
   issues: Issue[];
   hint?: string;
+  // A short marker after the label, such as "You" on the side the person is on.
+  tag?: string;
   optional?: boolean;
   children: ReactNode;
 }) {
@@ -101,6 +113,7 @@ export function Field({
         <label htmlFor={fieldId(path)} className="text-sm font-medium">
           {label}
           {optional && <span className="font-normal text-muted"> (optional)</span>}
+          {tag && <span className="ml-2 bg-accent px-1.5 py-px align-[1px] text-caption font-semibold text-accent-ink">{tag}</span>}
         </label>
         <SourceTag source={source} meta={meta} />
       </div>

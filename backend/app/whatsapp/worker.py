@@ -118,7 +118,11 @@ class WhatsAppWorker:
 
     def _claim_submission(self) -> Row | None:
         with self._db.transaction() as conn:
-            return store.claim_submission(conn, lease_seconds=self._settings.whatsapp_extraction_lease_seconds)
+            claimed = store.claim_submission(conn, lease_seconds=self._settings.whatsapp_extraction_lease_seconds)
+            if claimed is not None and any(image.get("kind") == "chat_export" for image in claimed["images"]):
+                # An export labels the customer's own messages with their name: these recognise them.
+                claimed = {**claimed, "owner_names": store.owner_names(conn, claimed["customer_id"])}
+            return claimed
 
     def _finish(self, finish: Callable[..., None], claimed: Row, result: object) -> None:
         with self._db.transaction() as conn:
@@ -138,7 +142,8 @@ class WhatsAppWorker:
             # The day the first screenshot arrived, in the customers' time zone: what the chat's "Today" means.
             received_on = claimed["first_image_at"].astimezone(ZoneInfo(self._settings.whatsapp_timezone)).date()
             response = await read_images(
-                images, client=self._client, provider=self._provider, settings=self._settings, received_on=received_on
+                images, client=self._client, provider=self._provider, settings=self._settings, received_on=received_on,
+                owner_names=claimed.get("owner_names") or (),
             )
         except asyncio.CancelledError:
             raise

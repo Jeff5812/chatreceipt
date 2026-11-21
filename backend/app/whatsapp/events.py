@@ -18,13 +18,20 @@ from app.uploads import ACCEPTED_FORMATS
 IMAGE_TYPES = frozenset(ACCEPTED_FORMATS.values())
 MAX_TEXT_CHARS = 4096
 
-Kind = Literal["text", "image", "reply", "unsupported"]
+Kind = Literal["text", "image", "reply", "unsupported", "document"]
+# A WhatsApp chat export sent as a document: the .txt file, or the .zip with media.
+CHAT_EXPORT_TYPES = frozenset(
+    {"text/plain", "application/zip", "application/x-zip-compressed", "application/x-zip", "application/zip-compressed", "multipart/x-zip"}
+)
+CHAT_EXPORT_SUFFIXES = (".txt", ".zip")
 
 
 @dataclass(frozen=True)
 class Sender:
     user_id: str | None
     phone: str | None
+    # The name on the person's WhatsApp profile, offered as their name on receipts. Not an identity.
+    profile_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -38,6 +45,7 @@ class InboundMessage:
     media_id: str = ""
     mime_type: str = ""
     sha256: str = ""
+    filename: str = ""
 
     def payload(self) -> dict[str, str]:
         """What the conversation step needs later; empty values are left out."""
@@ -47,6 +55,7 @@ class InboundMessage:
             "media_id": self.media_id,
             "mime_type": self.mime_type,
             "sha256": self.sha256,
+            "filename": self.filename,
         }
         return {key: value for key, value in values.items() if value}
 
@@ -110,7 +119,28 @@ def _sender(raw: dict[str, Any], contacts: list[dict[str, Any]]) -> Sender | Non
     only = contacts[0] if len(contacts) == 1 else {}
     user_id = _token(raw.get("from_user_id")) or _token(only.get("user_id")) or None
     phone = _phone(raw.get("from")) or _phone(only.get("wa_id"))
-    return Sender(user_id=user_id, phone=phone) if user_id or phone else None
+    return Sender(user_id=user_id, phone=phone, profile_name=_profile_name(only)) if user_id or phone else None
+
+
+def is_chat_export(mime_type: str, filename: str) -> bool:
+    """A document that can be a WhatsApp chat export: its name or type says .txt or .zip."""
+    return filename.lower().endswith(CHAT_EXPORT_SUFFIXES) or mime_type in CHAT_EXPORT_TYPES
+
+
+def _filename(value: Any) -> str:
+    """A document's name, for display and for the other person's name in an export. Never a path."""
+    if not isinstance(value, str):
+        return ""
+    base = value.replace(chr(92), "/").split("/")[-1]
+    return "".join(character for character in base if character.isprintable()).strip()[:200]
+
+
+def _profile_name(contact: dict[str, Any]) -> str:
+    name = _dict(contact.get("profile")).get("name")
+    if not isinstance(name, str):
+        return ""
+    cleaned = " ".join("".join(character for character in name if character.isprintable()).split())
+    return cleaned[:120]
 
 
 def _read_message(raw: dict[str, Any], contacts: list[dict[str, Any]], parsed: ParsedWebhook) -> None:
@@ -138,9 +168,16 @@ def _read_message(raw: dict[str, Any], contacts: list[dict[str, Any]], parsed: P
     elif kind in ("image", "document"):
         media = _dict(raw.get(kind))
         media_id, mime_type = _token(media.get("id")), _mime(media.get("mime_type"))
+        filename = _filename(media.get("filename"))
         if media_id and mime_type in IMAGE_TYPES:
             parsed.messages.append(
                 InboundMessage(**base, kind="image", media_id=media_id, mime_type=mime_type, sha256=_token(media.get("sha256")))
+            )
+        elif kind == "document" and media_id and is_chat_export(mime_type, filename):
+            parsed.messages.append(
+                InboundMessage(
+                    **base, kind="document", media_id=media_id, mime_type=mime_type, sha256=_token(media.get("sha256")), filename=filename
+                )
             )
         else:
             parsed.messages.append(InboundMessage(**base, kind="unsupported"))

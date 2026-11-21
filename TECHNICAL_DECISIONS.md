@@ -77,6 +77,26 @@ when the AI quota has run out.
 **16. A per-number webhook override.** The number's callback is set on the number, not the Meta app,
 because the app's own webhook serves another project and must not change.
 
+**16a. Who is who: ask once, at Confirm, and remember** (2026-11-20). A chat never names its owner, so
+the customer's own side would always be blank. Asking at the start of every receipt would slow everyone
+down; guessing from the WhatsApp profile name would put unconfirmed names on records. Instead the
+question comes when they tap Confirm (they're already committed, and it costs one tap), only when a name
+would be missing, at most once per receipt, and the answer is remembered. *Why:* the least effort for a
+correct record, and the asking stops as soon as ChatReceipt knows.
+
+**16b. Identities match on stable identifiers; names only suggest** (2026-11-20). A customer is Meta's
+business-scoped user ID; the people they deal with are remembered by phone number when the chat shows
+one, or by the label their phone gives them. A label match only replaces the label itself, and two people
+who share a label are never merged. Conflicts with an earlier receipt are shown for review, never settled
+silently. *Why:* two different people can share a name, and a wrong merge would put one person's debts on
+another's receipts.
+
+**16c. Chat exports are parsed before any AI sees them** (2026-11-20). The `.txt` or `.zip` is read in
+memory, deterministically, into the same conversation model the engine uses; the file name settles who
+the other person is. The AI then reads numbered lines with the same schema as screenshots. *Why:* who sent
+what, and when, is in the file: there's no reason to let a model guess it, and ZIPs need path, size and
+compression checks before anything is extracted.
+
 ## Documents and hosting
 
 **17. One HTML template printed by Chromium** for HTML, PDF and PNG. *Why:* the record looks identical

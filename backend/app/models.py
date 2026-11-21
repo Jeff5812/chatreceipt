@@ -134,10 +134,71 @@ class ReviewReason(BaseModel):
     message: str
 
 
+PersonRole = Literal["seller", "buyer", "payer", "payee", "agent", "other"]
+
+
+class Person(BaseModel):
+    """Someone with a part in the deal, as the conversation shows them."""
+
+    name: str
+    role: PersonRole
+    is_owner: bool = False
+    # Digits, when the conversation shows their number (an export's sender label, the chat header).
+    phone: str = ""
+    quote: str = ""
+
+
+class Parties(BaseModel):
+    """Who is who, seen from the person whose phone the screenshots or export came from."""
+
+    # "seller" or "buyer" when the conversation shows which side the phone's owner is on, otherwise "".
+    owner_role: Literal["seller", "buyer", ""] = ""
+    # The other side's name as the top of the chat (or an export) shows it; it may be a phone number.
+    other_party: str = ""
+    # Digits of the other side's number, when the conversation shows it.
+    other_phone: str = ""
+    people: list[Person] = Field(default_factory=list)
+
+
+class OtherDeal(BaseModel):
+    """A separate deal in the same conversation, left out of this record."""
+
+    summary: str
+    last_message: str = ""
+
+
+class ChatParticipant(BaseModel):
+    key: str
+    name: str
+    side: Literal["owner", "contact", "unknown"]
+    phone: str = ""
+    messages: int = 0
+
+
+class ChatSummary(BaseModel):
+    """What was read from a WhatsApp chat export."""
+
+    participants: list[ChatParticipant]
+    group: bool
+    messages: int
+    first_day: str = ""
+    last_day: str = ""
+    # How the phone owner was worked out: "file_name", "your_name", or "" when it wasn't.
+    owner_source: str = ""
+    photos_read: int = 0
+    media_in_archive: int = 0
+    truncated: bool = False
+
+
 class ExtractionResponse(BaseModel):
     contains_transaction: bool
     summary: str
     draft: TransactionDraft
+    # "screenshots", or "chat_export" for a WhatsApp export (.txt or .zip).
+    source: Literal["screenshots", "chat_export"] = "screenshots"
+    parties: Parties = Field(default_factory=Parties)
+    other_deals: list[OtherDeal] = Field(default_factory=list)
+    chat: ChatSummary | None = None
     # Keyed by draft path: "seller", "currency", "line_items.item-1", "discounts.discount-1", ...
     field_meta: dict[str, FieldMeta]
     review_required: bool
@@ -174,6 +235,8 @@ class UploadLimits(BaseModel):
     max_file_bytes: int
     max_total_bytes: int
     accepted_types: list[str]
+    # A WhatsApp chat export (.txt, or .zip with media), read on its own rather than with screenshots.
+    max_chat_export_bytes: int = 0
 
 
 class ConfigResponse(BaseModel):

@@ -50,7 +50,8 @@
       ],
       "delivery_fee": "2000",
       "payment_status": "unpaid",
-      "amount_paid": ""
+      "amount_paid": "",
+      "owner_role": "buyer"
     }
   },
   {
@@ -93,7 +94,9 @@
       ],
       "delivery_fee": "2500",
       "payment_status": "partially_paid",
-      "amount_paid": "15000"
+      "amount_paid": "15000",
+      "owner_role": "buyer",
+      "seller": "Ada Couture"
     }
   },
   {
@@ -141,7 +144,8 @@
         }
       ],
       "payment_status": "unpaid",
-      "amount_paid": ""
+      "amount_paid": "",
+      "owner_role": "seller"
     }
   },
   {
@@ -193,7 +197,9 @@
         }
       ],
       "discount_total": "1500",
-      "total": "24000"
+      "total": "24000",
+      "owner_role": "buyer",
+      "seller": "Kemi Thrift"
     }
   },
   {
@@ -234,7 +240,9 @@
       "review_required": true,
       "flags_any": [
         "line_items"
-      ]
+      ],
+      "owner_role": "buyer",
+      "seller": "Gadget Hub"
     }
   },
   {
@@ -259,7 +267,9 @@
       "contains_transaction": true,
       "review_required": true,
       "payment_status_not": "paid",
-      "amount_paid": ""
+      "amount_paid": "",
+      "owner_role": "buyer",
+      "seller": "Mide Hair"
     }
   },
   {
@@ -306,7 +316,9 @@
       ],
       "payment_status": "unpaid",
       "amount_paid": "",
-      "review_required": true
+      "review_required": true,
+      "owner_role": "seller",
+      "buyer": "Chinedu"
     }
   },
   {
@@ -348,7 +360,9 @@
         }
       ],
       "payment_status": "partially_paid",
-      "amount_paid": "150"
+      "amount_paid": "150",
+      "owner_role": "seller",
+      "buyer": "Lena Park"
     }
   },
   {
@@ -403,7 +417,9 @@
       ],
       "delivery_fee": "1500",
       "payment_status": "paid",
-      "total": "21100"
+      "total": "21100",
+      "owner_role": "buyer",
+      "seller": "Bisi Foods"
     }
   },
   {
@@ -457,7 +473,9 @@
       "amount_paid": "20000",
       "payment_status": "partially_paid",
       "total": "",
-      "review_required": true
+      "review_required": true,
+      "owner_role": "buyer",
+      "seller": "Bola Studio"
     }
   },
   {
@@ -500,7 +518,9 @@
       ],
       "amount_paid": "20000",
       "payment_status": "partially_paid",
-      "total": "60000"
+      "total": "60000",
+      "owner_role": "buyer",
+      "seller": "Bola Studio"
     }
   }
 ]

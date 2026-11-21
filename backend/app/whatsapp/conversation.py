@@ -11,6 +11,7 @@ signed webhook, and every lookup is filtered by that customer.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta
@@ -23,13 +24,16 @@ from app.config import Settings
 from app.currencies import get_currency
 from app.db.pool import Connection
 from app.models import PaymentStatus, TransactionDraft
-from app.whatsapp import assistant, corrections, store
+from app.names import clean_name
+from app.observability import log_event
+from app.whatsapp import assistant, corrections, parties, store
 from app.whatsapp.messages import ReplyId, button_message, list_message, parse_reply_id, receipt_request, reply_id, text_message
 from app.whatsapp.messages import Row as ChoiceRow
 from app.whatsapp.receipts import RECORD_GONE
 from app.whatsapp.reconcile import accept, proposal, settle_status
 from app.whatsapp.store import Row
 from app.whatsapp.summary import (
+    CONFIRM_QUESTION,
     STATUS_LABELS,
     draft_messages,
     open_reasons,
@@ -40,6 +44,7 @@ from app.whatsapp.summary import (
     recent_text,
     saved_text,
     money,
+    next_step,
     typed_value_needed,
     update_messages,
 )
@@ -74,7 +79,7 @@ WELCOME_BACK = "Hi again 👋 Your draft from earlier isn't saved yet. Do you wa
 WELCOME_BACK_READING = "Hi again 👋 " + STILL_READING
 HELP = (
     "*How ChatReceipt works*\n"
-    "1. Send a screenshot of a chat or a payment.\n"
+    "1. Send a screenshot of a chat or a payment, or export the chat (in the chat, tap ⋮ › More › Export chat) and send me the file.\n"
     "2. Check what I found. To fix anything, just tell me, like “the price is 20k” or “he still owes 40k”.\n"
     "3. Tap *Confirm* and I'll send you the receipt.\n\n"
     "*You can also send*\n"
@@ -83,6 +88,8 @@ HELP = (
     "• *recent* to see your latest records\n"
     "• *web* to open your records in a browser\n"
     "• *cancel* to stop working on a draft\n"
+    "• *my name is …* to set the name on your receipts\n"
+    "• *clear* to clear this chat's history (your records stay)\n"
     "• *delete my data* to remove everything\n\n"
     "*Or just ask*, for example:\n"
     "• who still owes me?\n"
@@ -99,7 +106,33 @@ NOTHING_FOUND = "I couldn't find a saved record {what}. Send *recent* to see you
 NOTHING_OWED = "Nothing is owed on your saved records {what}."
 WHICH_RECORD = "I found {count} records {what}. Which one should I send?"
 ALREADY_DONE = "I've already got that one 👍"
-UNSUPPORTED = "I can only read screenshots (JPEG, PNG or WebP) and text messages. Please send a screenshot of the chat or payment."
+UNSUPPORTED = (
+    "I can read screenshots (JPEG, PNG or WebP), WhatsApp chat exports (.txt or .zip) and text messages. "
+    "Please send a screenshot of the chat or payment, or export the chat and send the file."
+)
+EXPORT_ACKNOWLEDGE = "📥 Got your chat export. I'm reading it now."
+EXPORT_HELD_PROMPT = "You have a draft waiting. Should I start a new record from this chat instead?"
+EXPORT_BUSY = "I'm still reading what you sent before. Send the chat export again when I've finished."
+READING_EXPORT = "I'm reading your chat export. Send the screenshot again when I've finished."
+READING_EXPORT_AGAIN = "🔄 Reading your chat export again now."
+SCREENSHOTS_HELD_PROMPT = "You have a draft from a chat export waiting. Should I start a new record from these screenshots?"
+KEEPING_DRAFT = "Okay, keeping this draft."
+FIRST_EXPORT_NOTE = (
+    "Hi, I'm *ChatReceipt* 👋 _Your chat is sent to our AI provider to be read, and ChatReceipt doesn't keep the "
+    "file. You check everything before a record is saved. Send *delete my data* any time to remove your records._"
+)
+READING_DEAL = "📥 Reading the chat again for this deal: {deal}"
+NO_SUCH_DEAL = "There's no deal {number} in your last chat export."
+DEAL_FROM_SCREENSHOTS = "To make a receipt for another deal in these screenshots, send only the screenshots of that deal."
+CLEAR_PROMPT = (
+    "*Clear this chat's history?*\n"
+    "I'll forget your open draft and what I remember from our conversation. Your saved records stay.\n\n"
+    "_The messages on your phone stay too: WhatsApp doesn't let me delete them._"
+)
+CLEARED = "Done. Your open draft and our conversation history are cleared. Your saved records are still here."
+CLEARED_NOTHING = "Done. Our conversation history is cleared. Your saved records are still here."
+CLEAR_KEPT = "Nothing was cleared."
+WHAT_TO_CHANGE = "No problem. Tell me what's wrong in your own words, like “the buyer is Emeka” or “he paid 20k”, or pick from the list."
 NOTHING_OPEN = "There's no draft to work on right now. Send a screenshot to start one."
 NOTHING_TO_RETRY = "There's nothing to read again right now. Send the screenshot and I'll read it."
 DRAFT_GONE = "That draft is no longer available. Send the screenshot again to start a new one."
@@ -150,9 +183,27 @@ _COMMANDS: dict[str, frozenset[str]] = {
     "confirm": frozenset({"confirm", "save", "save it", "confirm it", "save record"}),
     "correct": frozenset({"correct", "edit", "fix", "change"}),
     "erase": frozenset({"delete my data", "delete my account", "erase my data"}),
+    "clear": frozenset({
+        "clear", "clear history", "clear chat", "clear my history", "clear my chat", "clear conversation",
+        "clear the chat", "clear chat history", "clear my chat history", "clear our chat", "clear this chat",
+    }),
 }
 # Commands that still work while ChatReceipt is waiting for a typed value.
-_ESCAPES = frozenset({"confirm", "retry", "show", "restart", "help", "erase", "recent", "web", "greeting"})
+_ESCAPES = frozenset({"confirm", "retry", "show", "restart", "help", "erase", "recent", "web", "greeting", "clear"})
+# Short answers read against the question just asked: "yes" or "that's correct" to "Is this correct?" confirms.
+# A bare "correct" isn't here: it's also the name of the Correct button, and a saved record can't be edited.
+_YES = frozenset({
+    "yes", "yeah", "yep", "yh", "ya", "yea", "ok", "okay", "oky", "sure", "that s correct", "thats correct",
+    "it s correct", "its correct", "right", "that s right", "thats right", "exactly", "perfect", "fine", "all good",
+    "yes correct", "yes it is", "yes it s correct", "na so", "e correct", "it is correct", "all correct",
+})
+_NO = frozenset({
+    "no", "nope", "nah", "not correct", "incorrect", "wrong", "that s wrong", "thats wrong", "no it s not", "it s not correct",
+    "its not correct", "not right", "no o", "e no correct",
+})
+_DEAL = re.compile(r"^(?:make |receipt for )?deal\s*(?:no|number)?\s*([1-3])$")
+# Inbound kinds read by the AI, which count towards the hourly and daily reading limits.
+_READ_BY_AI = ("image", "document")
 _BACK = frozenset({"back", "keep", "cancel"})
 _NO_DATE = frozenset({"skip", "no date", "none", "no", "nope", "not sure", "dont know", "don t know", "i don t know"})
 _MONTH_ABBR = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
@@ -202,13 +253,14 @@ class Turn:
         """Today in the customers' time zone, for dates such as “yesterday”."""
         return datetime.now(ZoneInfo(self.settings.whatsapp_timezone)).date()
 
-    def send(self, payload: dict[str, Any]) -> None:
+    def send(self, payload: dict[str, Any], *, remember: bool = True) -> None:
         self._sent += 1
         store.enqueue(self.conn, self.customer, payload, f"{self.key}:{self._sent}")
-        store.remember(self.conn, self.customer["id"], "ChatReceipt", _gist(payload))
+        if remember:
+            store.remember(self.conn, self.customer["id"], "ChatReceipt", _gist(payload))
 
-    def say(self, body: str) -> None:
-        self.send(text_message(body))
+    def say(self, body: str, *, remember: bool = True) -> None:
+        self.send(text_message(body), remember=remember)
 
     # -- menus ------------------------------------------------------------------------------
 
@@ -224,6 +276,31 @@ class Turn:
 
     def menu(self) -> None:
         self.send(button_message("What would you like to do?", self._main_buttons()))
+
+    def help(self) -> None:
+        self.send(button_message(HELP, [*self._main_buttons()[:2], (reply_id("clear", arg="ask"), "Clear history")]))
+
+    def ask_clear(self) -> None:
+        """Clearing the conversation keeps saved records; deleting everything is a separate, confirmed step."""
+        self.send(
+            button_message(
+                CLEAR_PROMPT,
+                [(reply_id("clear", arg="yes"), "Clear history"), (reply_id("clear", arg="erase"), "Delete all my data"), (reply_id("clear", arg="no"), "Keep everything")],
+            )
+        )
+
+    def _on_clear(self, choice: str) -> None:
+        if choice == "ask":
+            self.ask_clear()
+        elif choice == "yes":
+            had_draft = store.clear_history(self.conn, self.customer["id"])
+            log_event("whatsapp.history_cleared", draft=had_draft)
+            # The confirmation isn't remembered either: the conversation starts again from nothing.
+            self.say(CLEARED if had_draft else CLEARED_NOTHING, remember=False)
+        elif choice == "erase":
+            self.ask_erase()
+        else:
+            self.say(CLEAR_KEPT)
 
     def greet(self) -> None:
         """A returning customer says hello: welcome them back, with where their records stand."""
@@ -282,7 +359,7 @@ class Turn:
         elif intent == "thanks":
             self.say(reply or THANKS_REPLY)
         elif intent == "help":
-            self.send(button_message(HELP, self._main_buttons()[:2]))
+            self.help()
         elif intent == "make_receipt":
             self.say("\n\n".join(part for part in (reply, ASK_FOR_IMAGE) if part))
         elif intent == "other":
@@ -298,7 +375,7 @@ class Turn:
         elif intent == "thanks":
             self.say(THANKS_REPLY)
         elif intent == "help":
-            self.send(button_message(HELP, self._main_buttons()[:2]))
+            self.help()
         elif intent == "make_receipt":
             self.say(ASK_FOR_IMAGE)
         elif intent == "web_link":
@@ -461,6 +538,12 @@ class Turn:
             self.send(message)
 
     def start_submission(self, images: list[dict[str, str]]) -> None:
+        """Start reading: screenshots wait briefly for the rest of an album, a chat export starts at once."""
+        export = next((entry for entry in images if entry.get("kind") == "chat_export"), None)
+        if export is not None:
+            store.create_submission(self.conn, self.customer["id"], [export], wait_seconds=0)
+            self.say(READING_DEAL.format(deal=export["focus"]) if export.get("focus") else EXPORT_ACKNOWLEDGE)
+            return
         store.create_submission(self.conn, self.customer["id"], images, wait_seconds=self.settings.whatsapp_album_wait_seconds)
         self.say(ACKNOWLEDGE)
 
@@ -475,22 +558,26 @@ class Turn:
             self.start_submission([image])
             return
         limit = self.settings.max_files
+        from_export = _has_export(submission["images"])
         if submission["status"] == "awaiting_confirmation":
-            held = submission["held_images"]
+            # Held screenshots never join a held chat export: the newer kind replaces the other.
+            held = [] if _has_export(submission["held_images"]) else submission["held_images"]
             if self._repeats(image, [*submission["images"], *held]) or len(held) >= limit:
                 return
             store.update_submission(self.conn, submission["id"], held_images=[*held, image])
             if not held:
+                sid, revision = str(submission["id"]), submission["revision"]
+                if from_export:
+                    # A draft from a chat export is never mixed with screenshots.
+                    buttons = [(reply_id("hold", sid, revision, "new"), "Start a new record"), (reply_id("hold", sid, revision, "drop"), "Keep this draft")]
+                    self.send(button_message(SCREENSHOTS_HELD_PROMPT, buttons))
+                    return
                 warning = HELD_EDIT_WARNING if submission["edited_fields"] else ""
-                self.send(
-                    button_message(
-                        HELD_PROMPT + warning,
-                        [
-                            (reply_id("hold", str(submission["id"]), submission["revision"], "add"), "Add to this record"),
-                            (reply_id("hold", str(submission["id"]), submission["revision"], "new"), "Start a new record"),
-                        ],
-                    )
-                )
+                buttons = [(reply_id("hold", sid, revision, "add"), "Add to this record"), (reply_id("hold", sid, revision, "new"), "Start a new record")]
+                self.send(button_message(HELD_PROMPT + warning, buttons))
+            return
+        if from_export:
+            self.say(READING_EXPORT)
             return
         images = submission["images"]
         if self._repeats(image, images):
@@ -512,20 +599,25 @@ class Turn:
 
     @staticmethod
     def _repeats(image: dict[str, str], images: list[dict[str, str]]) -> bool:
+        """The same file again: WhatsApp's media ID, or the same content (a forwarded copy has a new ID)."""
         return any(
-            entry.get("media_id") == image["media_id"] or (image["sha256"] and entry.get("sha256") == image["sha256"])
+            (entry.get("media_id") == image["media_id"] and not entry.get("focus"))
+            or (image["sha256"] and entry.get("sha256") == image["sha256"])
             for entry in images
         )
 
-    def confirm(self, submission: Row, *, without_date: bool = False) -> None:
+    def confirm(self, submission: Row, *, without_date: bool = False, note: str = "") -> None:
         draft = draft_of(submission)
         computation = compute(draft)
         if not ready_to_save(draft, calculate(draft)) or computation.total is None:
             self.show_draft(submission, lead="This record can't be saved yet.")
             return
-        if not draft.transaction_date.strip() and not without_date:
-            self._ask_date(submission)
+        if self._ask_about_parties(submission, draft):
             return
+        if not draft.transaction_date.strip() and not without_date:
+            self._ask_date(submission, note=note)
+            return
+        state = parties.state_of(submission["review"])
         record = store.save_transaction(
             self.conn,
             customer=self.customer,
@@ -536,25 +628,32 @@ class Turn:
             total=computation.total,
             amount_paid=computation.amount_paid,
             outstanding=computation.outstanding,
+            owner_role=state.get("owner_role") or None,
         )
         store.update_submission(self.conn, submission["id"], status="confirmed", pending_edit=None, held_images=[], instruction=None, dialogue=[])
+        self._remember_counterpart(draft, state)
+        log_event(
+            "whatsapp.parties_saved", seller=bool(draft.seller.strip()), buyer=bool(draft.buyer.strip()),
+            owner_role=state.get("owner_role") or "unknown", saved_name_used=bool(state.get("you")),
+            corrected=any(path in submission["edited_fields"] for path in parties.ROLES),
+        )
         self.send(receipt_request(str(record["id"]), "png", receipt_caption(record["reference"], draft)))
         self.send(
             button_message(
-                saved_text(record["reference"]),
+                f"{note}\n\n{saved_text(record['reference'])}" if note else saved_text(record["reference"]),
                 [(reply_id("pdf", arg=str(record["id"])), "Get PDF"), (reply_id("menu", arg="scan"), "Scan another"), (reply_id("menu", arg="recent"), "Recent records")],
             )
         )
         self._start_held(submission)
 
-    def _ask_date(self, submission: Row) -> None:
+    def _ask_date(self, submission: Row, *, note: str = "") -> None:
         """One question with one-tap answers, instead of saving a receipt with no date."""
         sid, revision, today = str(submission["id"]), submission["revision"], self.today
         yesterday = today - timedelta(days=1)
         store.update_submission(self.conn, submission["id"], pending_edit={"target": "transaction_date", "then": [], "save_after": True})
         self.send(
             button_message(
-                ASK_DATE,
+                f"{note}\n\n{ASK_DATE}" if note else ASK_DATE,
                 [
                     (reply_id("date", sid, revision, today.isoformat()), f"Today · {today.day} {_MONTH_ABBR[today.month - 1]}"),
                     (reply_id("date", sid, revision, yesterday.isoformat()), f"Yesterday · {yesterday.day} {_MONTH_ABBR[yesterday.month - 1]}"),
@@ -574,6 +673,189 @@ class Turn:
             return
         updated = self._save(submission, draft.model_copy(update={"transaction_date": picked.isoformat()}), ["transaction_date"], [], explicit_status=False, pending_edit=None)
         self.confirm(updated)
+
+    # -- who is who (parties.py) ----------------------------------------------------------------
+
+    def _remember_counterpart(self, draft: TransactionDraft, state: dict[str, Any]) -> None:
+        """The other person's confirmed name, so their next receipt needs no correction."""
+        remembered = parties.counterpart_to_remember(draft, state)
+        if remembered is None:
+            return
+        try:
+            counterparty_id = UUID(remembered["counterparty_id"]) if remembered["counterparty_id"] else None
+        except ValueError:
+            counterparty_id = None
+        store.remember_counterparty(
+            self.conn, self.customer["id"], name=remembered["name"], phone=remembered["phone"], label=remembered["label"],
+            role=remembered["role"], counterparty_id=counterparty_id,
+        )
+
+    def _ask_about_parties(self, submission: Row, draft: TransactionDraft) -> bool:
+        """Before saving: ask once who the customer is, or their name, when their side would be blank."""
+        review = dict(submission["review"] or {})
+        state = parties.state_of(review)
+        question = parties.question_needed(
+            draft, state, saved_name=self.customer.get("party_name"), skipped=self.customer.get("name_prompts_skipped") or 0
+        )
+        if question == "role":
+            self._ask_role(submission, review, state)
+        elif question == "name":
+            self._ask_name(submission, review, state, state["owner_role"])
+        return bool(question)
+
+    def _ask_role(self, submission: Row, review: dict[str, Any], state: dict[str, Any]) -> None:
+        sid, revision = str(submission["id"]), submission["revision"]
+        store.update_submission(self.conn, submission["id"], review={**review, "parties": {**state, "asked": "role"}})
+        order = parties.role_order(self.customer.get("usual_role"))
+        buttons = [(reply_id("role", sid, revision, role), parties.ROLE_LABELS[role]) for role in order]
+        buttons.append((reply_id("role", sid, revision, "neither"), "Neither"))
+        self.send(button_message(parties.role_question(state.get("other_party") or ""), buttons))
+        log_event("whatsapp.party_question", kind="role", usual_role=bool(self.customer.get("usual_role")))
+
+    def _role_answer(self, submission: Row, draft: TransactionDraft, role: str) -> None:
+        """The customer said which side they're on: names go where they belong, then saving carries on if it was asked."""
+        review = dict(submission["review"] or {})
+        state = parties.state_of(review)
+        asked = state.get("asked") == "role"
+        log_event("whatsapp.party_answer", kind="role", choice=role, asked=asked)
+        if role == "neither":
+            updated = store.update_submission(self.conn, submission["id"], review={**review, "parties": {**state, "owner_role": "", "neither": True}})
+            if asked:
+                self.confirm(updated)
+            else:
+                self.ask(updated, "Okay, you're neither side in this deal.")
+            return
+        store.set_usual_role(self.conn, self.customer["id"], role)
+        changed, state, moved = parties.apply_role(draft, state, role)
+        saved_name = self.customer.get("party_name")
+        if saved_name and not getattr(changed, role).strip():
+            changed, state = changed.model_copy(update={role: saved_name}), {**state, "you": role}
+        notes = ["Seller and buyer swapped"] if moved else [f"You're the {role}"]
+        updated = self._save(submission, changed, moved, notes, explicit_status=False, review={**review, "parties": state})
+        if not asked:
+            self.show_update(updated, notes)
+        elif not getattr(changed, role).strip() and (self.customer.get("name_prompts_skipped") or 0) < parties.MAX_SKIPS:
+            self._ask_name(updated, {**review, "parties": state}, state, role)
+        else:
+            self.confirm(updated)
+
+    def _ask_name(self, submission: Row, review: dict[str, Any], state: dict[str, Any], role: str) -> None:
+        sid, revision = str(submission["id"]), submission["revision"]
+        store.update_submission(
+            self.conn, submission["id"], review={**review, "parties": {**state, "asked": "name"}},
+            pending_edit={"target": role, "then": [], "own_name": True},
+        )
+        suggested = parties.suggested_name(self.customer.get("whatsapp_name"), state)
+        buttons = [(reply_id("name", sid, revision, "profile"), parties.button_title(suggested))] if suggested else []
+        buttons.append((reply_id("name", sid, revision, "skip"), "Not now"))
+        self.send(button_message(parties.name_question(role, suggested=suggested), buttons))
+        log_event("whatsapp.party_question", kind="name", suggested=bool(suggested))
+
+    def _name_answer(self, submission: Row, draft: TransactionDraft, choice: str) -> None:
+        state = parties.state_of(submission["review"])
+        role = state.get("owner_role") or ""
+        suggested = parties.suggested_name(self.customer.get("whatsapp_name"), state)
+        if choice != "profile" or role not in parties.ROLES or not suggested:
+            self._skip_own_name(submission)
+            return
+        self._use_own_name(submission, draft, role, suggested, choice="profile")
+
+    def _skip_own_name(self, submission: Row) -> None:
+        store.skip_name_prompt(self.conn, self.customer["id"])
+        log_event("whatsapp.party_answer", kind="name", choice="skip")
+        self.confirm(store.update_submission(self.conn, submission["id"], pending_edit=None))
+
+    def _use_own_name(self, submission: Row, draft: TransactionDraft, role: str, name: str, *, choice: str) -> None:
+        """Their name goes on their side of this receipt, and is remembered for the next ones."""
+        store.set_party_name(self.conn, self.customer["id"], name)
+        log_event("whatsapp.party_answer", kind="name", choice=choice)
+        review = dict(submission["review"] or {})
+        state = {**parties.state_of(review), "you": role}
+        updated = self._save(submission, draft.model_copy(update={role: name}), [], [], explicit_status=False, review={**review, "parties": state}, pending_edit=None)
+        self.confirm(updated, note=parties.NAME_REMEMBERED.format(name=name))
+
+    def _typed_own_name(self, submission: Row, draft: TransactionDraft, text: str) -> None:
+        """A typed answer to "What name should go on your receipts?"; anything else is handled as usual."""
+        if normalise(text) in parties.SKIP_WORDS:
+            self._skip_own_name(submission)
+            return
+        cleared = store.update_submission(self.conn, submission["id"], pending_edit=None)
+        if (role := parties.role_in(text)) is not None:
+            self._role_answer(cleared, draft, role)
+            return
+        name = parties.answered_name(text)
+        if not name or quick_changes(text) is not None or assistant.quick_request(text, has_draft=True) is not None:
+            # A correction or a question, not a name: drop the question and handle it as usual.
+            self._on_draft_text(cleared, text)
+            return
+        role = parties.state_of(submission["review"]).get("owner_role") or str(submission["pending_edit"]["target"])
+        self._use_own_name(cleared, draft, role, clean_name(name), choice="typed")
+
+    def set_own_name(self, name: str, submission: Row | None) -> None:
+        """"My name is …": remembered for receipts, and put on the open draft if it's clear which side is theirs."""
+        store.set_party_name(self.conn, self.customer["id"], name)
+        log_event("whatsapp.party_answer", kind="name", choice="stated")
+        if submission is not None:
+            review = dict(submission["review"] or {})
+            state = parties.state_of(review)
+            role = state.get("owner_role") or ""
+            draft = draft_of(submission)
+            if role in parties.ROLES and (not getattr(draft, role).strip() or state.get("you") == role):
+                note = f"{role.capitalize()}: {name}"
+                updated = self._save(submission, draft.model_copy(update={role: name}), [], [note], explicit_status=False, review={**review, "parties": {**state, "you": role}})
+                self.show_update(updated, [note, "I'll use this name on your next receipts too."])
+                return
+        self.say(parties.NAME_SET.format(name=name))
+
+    # -- other deals in the same chat export ----------------------------------------------------
+
+    def other_deal(self, number: int, submission: Row | None) -> None:
+        """"deal 2": read the same chat export again for another deal it holds."""
+        open_deals = submission is not None and bool((submission.get("review") or {}).get("other_deals"))
+        if open_deals and not _has_export(submission["images"]):  # type: ignore[index]
+            self.say(DEAL_FROM_SCREENSHOTS)
+            return
+        source = submission if open_deals else store.latest_export_submission(self.conn, self.customer["id"])
+        deals = ((source or {}).get("review") or {}).get("other_deals") or []
+        export = next((image for image in (source or {}).get("images") or [] if image.get("kind") == "chat_export"), None)
+        if export is None or not 1 <= number <= len(deals):
+            self.say(NO_SUCH_DEAL.format(number=number))
+            return
+        deal = deals[number - 1]
+        # The list from the first reading travels with the export, so the numbers don't change between readings.
+        entry = {
+            **export, "focus": deal, "deals": deals, "message_id": self.message_id,
+            "sha256": _focused_hash(str(export.get("original_sha256") or export.get("sha256") or ""), deal),
+            "original_sha256": str(export.get("original_sha256") or export.get("sha256") or ""),
+        }
+        if submission is not None and submission["status"] == "awaiting_confirmation":
+            sid, revision = str(submission["id"]), submission["revision"]
+            store.update_submission(self.conn, submission["id"], held_images=[entry])
+            self.send(button_message(EXPORT_HELD_PROMPT, [(reply_id("hold", sid, revision, "new"), "Start a new record"), (reply_id("hold", sid, revision, "drop"), "Keep this draft")]))
+        elif submission is not None:
+            self.say(EXPORT_BUSY)
+        else:
+            self.start_submission([entry])
+
+    def on_document(self, payload: dict[str, str], message_id: str) -> None:
+        """A WhatsApp chat export: read on its own, never mixed into a draft from screenshots."""
+        export = {
+            "message_id": message_id, "media_id": payload.get("media_id", ""), "mime_type": payload.get("mime_type", ""),
+            "sha256": payload.get("sha256", ""), "filename": payload.get("filename", ""), "kind": "chat_export",
+        }
+        submission = store.open_submission(self.conn, self.customer["id"])
+        if submission is None:
+            self.start_submission([export])
+            return
+        if self._repeats(export, [*submission["images"], *submission["held_images"]]):
+            self.say(ALREADY_DONE)
+            return
+        if submission["status"] == "awaiting_confirmation":
+            sid, revision = str(submission["id"]), submission["revision"]
+            store.update_submission(self.conn, submission["id"], held_images=[export])
+            self.send(button_message(EXPORT_HELD_PROMPT, [(reply_id("hold", sid, revision, "new"), "Start a new record"), (reply_id("hold", sid, revision, "drop"), "Keep this draft")]))
+            return
+        self.say(EXPORT_BUSY)
 
     def send_pdf(self, transaction_id: str) -> None:
         """Queue a PDF copy of a record, which can only ever be this customer's own."""
@@ -610,7 +892,7 @@ class Turn:
                 self.send(button_message(NOTHING_TO_RETRY, self._main_buttons()))
                 return
             store.restart_collection(self.conn, failed["id"], failed["images"], wait_seconds=0, revision=failed["revision"] + 1)
-            self.say(READING_AGAIN)
+            self.say(READING_EXPORT_AGAIN if _has_export(failed["images"]) else READING_AGAIN)
             return
         if submission["status"] != "awaiting_confirmation":
             self.say(STILL_READING)
@@ -623,7 +905,7 @@ class Turn:
 
     def _reread(self, submission: Row) -> None:
         store.restart_collection(self.conn, submission["id"], submission["images"], wait_seconds=0, revision=submission["revision"] + 1)
-        self.say(READING_AGAIN)
+        self.say(READING_EXPORT_AGAIN if _has_export(submission["images"]) else READING_AGAIN)
 
     # -- corrections ---------------------------------------------------------------------------
 
@@ -750,6 +1032,8 @@ class Turn:
             if normalise(text) in _BACK:
                 updated = store.update_submission(self.conn, submission["id"], pending_edit=None)  # type: ignore[index]
                 self.show_draft(updated)
+            elif submission["pending_edit"].get("own_name"):  # type: ignore[index]
+                self._typed_own_name(submission, draft_of(submission), text)  # type: ignore[arg-type]
             else:
                 self._apply_edit(submission, text)  # type: ignore[arg-type]
             return
@@ -764,7 +1048,7 @@ class Turn:
         if command == "greeting" and submission is not None:
             self.welcome_back(submission)
         elif command == "help":
-            self.send(button_message(HELP, self._main_buttons()[:2]))
+            self.help()
         elif command == "recent":
             self.recent()
         elif command == "web":
@@ -777,11 +1061,17 @@ class Turn:
             self.read_again(submission)
         elif command == "erase":
             self.ask_erase()
+        elif command == "clear":
+            self.ask_clear()
         elif command == "cancel":
             if submission is None:
                 self.say(NOTHING_OPEN)
             else:
                 self.cancel(submission)
+        elif (own := parties.stated_name(text)) is not None:
+            self.set_own_name(own, submission if awaiting else None)
+        elif (deal := _DEAL.match(normalise(text))) is not None:
+            self.other_deal(int(deal[1]), submission)
         elif submission is None:
             if command == "greeting":
                 self.greet()
@@ -796,16 +1086,55 @@ class Turn:
                 store.queue_request(self.conn, self.customer["id"], text, self.message_id, has_draft=False, earlier=self.earlier)
         elif submission["status"] != "awaiting_confirmation":
             self.say(STILL_READING)
+        elif self._answer_in_context(submission, text):
+            pass
         elif command == "confirm":
             self.confirm(submission)
         elif command == "correct":
             self._open_corrections(submission)
         elif command == "show":
             self.show_draft(submission)
+        elif (role := parties.role_in(text)) is not None:
+            self._role_answer(submission, draft_of(submission), role)
         elif (request := assistant.quick_request(text, has_draft=True)) is not None:
             self.assist(request)
         else:
             self._on_draft_text(submission, text)
+
+    def _answer_in_context(self, submission: Row, text: str) -> bool:
+        """A short "yes", "correct" or "no", read as the answer to the question the draft just asked.
+
+        To "Is this correct?" a yes confirms and a no opens the corrections. To a proposed fix ("So the
+        full price was ₦60,000?") a yes accepts it and a no keeps the figures. Anything else is left to
+        the usual handling, so "correct" still opens the corrections when no question is waiting.
+        """
+        plain = normalise(text)
+        if plain not in _YES and plain not in _NO:
+            return False
+        review = dict(submission["review"] or {})
+        state = parties.state_of(review)
+        if state.get("asked") == "role" and not state.get("owner_role") and not state.get("neither"):
+            # "Yes" doesn't answer "Who are you in this chat?": ask again rather than save without an answer.
+            self._ask_role(submission, review, state)
+            return True
+        draft = draft_of(submission)
+        question, buttons = next_step(draft, calculate(draft), submission_id=str(submission["id"]), revision=submission["revision"])
+        actions = {parsed.action for parsed in (parse_reply_id(button_id) for button_id, _ in buttons) if parsed}
+        yes = plain in _YES
+        if question == CONFIRM_QUESTION:
+            if yes:
+                self.confirm(submission)
+            else:
+                self.say(WHAT_TO_CHANGE)
+                self._open_corrections(submission)
+            return True
+        if "settle" in actions:
+            has_accept = any((parse_reply_id(button_id) or ReplyId("")).arg == "yes" for button_id, _ in buttons)
+            if yes and not has_accept:
+                return False
+            self._settle(submission, draft, "yes" if yes else "keep")
+            return True
+        return False
 
     def _open_corrections(self, submission: Row) -> None:
         menus = corrections.Menus(draft_of(submission), str(submission["id"]), submission["revision"])
@@ -846,7 +1175,7 @@ class Turn:
         elif intent == "new_record":
             self.start_again(submission)
         elif intent == "help":
-            self.send(button_message(HELP, self._main_buttons()[:2]))
+            self.help()
         elif intent == "greeting":
             self.welcome_back(submission)
         elif intent == "thanks":
@@ -897,6 +1226,8 @@ class Turn:
             self.send_pdf(reply.arg)
         elif reply.action == "receipt":
             self.resend_one(reply.arg, "image")
+        elif reply.action == "clear":
+            self._on_clear(reply.arg)
         else:
             self._on_draft_reply(reply)
 
@@ -910,7 +1241,7 @@ class Turn:
         elif choice == "web":
             self.web_link()
         elif choice == "help":
-            self.send(button_message(HELP, self._main_buttons()[:2]))
+            self.help()
         elif choice in ("draft", "restart"):
             submission = store.open_submission(self.conn, self.customer["id"])
             if submission is None:
@@ -991,6 +1322,10 @@ class Turn:
                 self._reread(submission)
             else:
                 self.ask(submission, "Okay, keeping your draft.")
+        elif action == "role" and arg in (*parties.ROLES, "neither"):
+            self._role_answer(submission, draft, arg)
+        elif action == "name":
+            self._name_answer(submission, draft, arg)
         else:
             self.show_draft(submission)
 
@@ -1042,6 +1377,12 @@ class Turn:
         held = submission["held_images"]
         if not held:
             self.show_draft(submission)
+        elif choice == "drop":
+            updated = store.update_submission(self.conn, submission["id"], held_images=[])
+            self.ask(updated, KEEPING_DRAFT)
+        elif choice == "add" and _has_export([*submission["images"], *held]):
+            # An old "Add to this record" button, from before a chat export took the screenshots' place.
+            self.show_draft(submission)
         elif choice == "add":
             images = [*submission["images"], *held][: self.settings.max_files]
             store.restart_collection(
@@ -1063,15 +1404,25 @@ class Turn:
             if recent == per_minute + 1:
                 self.say(SLOW_DOWN)
             return True
-        if kind == "image":
-            hour = store.inbound_count(self.conn, customer_id, seconds=3600, kind="image")
-            day = store.inbound_count(self.conn, customer_id, seconds=86_400, kind="image")
+        if kind in _READ_BY_AI:
+            # Screenshots and chat exports each cost an AI reading, so they share the same limits.
+            hour = store.inbound_count(self.conn, customer_id, seconds=3600, kinds=_READ_BY_AI)
+            day = store.inbound_count(self.conn, customer_id, seconds=86_400, kinds=_READ_BY_AI)
             hour_limit, day_limit = self.settings.whatsapp_images_per_hour, self.settings.whatsapp_images_per_day
             if hour > hour_limit or day > day_limit:
                 if hour == hour_limit + 1 or day == day_limit + 1:
                     self.say(IMAGE_LIMIT)
                 return True
         return False
+
+
+def _has_export(images: Sequence[dict[str, Any]]) -> bool:
+    return any(entry.get("kind") == "chat_export" for entry in images)
+
+
+def _focused_hash(sha256: str, deal: str) -> str:
+    """A fingerprint for one deal in an export: a record of another deal isn't reported as a duplicate."""
+    return hashlib.sha256(f"{sha256}|{' '.join(deal.split()).casefold()}".encode("utf-8")).hexdigest()
 
 
 def _replace(draft: TransactionDraft, row_id: str, **values: str) -> TransactionDraft:
@@ -1148,6 +1499,10 @@ def handle_inbound(conn: Connection, settings: Settings, row: Row, *, understand
         if first_contact:
             turn.say(FIRST_IMAGE_NOTE)
         turn.on_image(payload, row["message_id"])
+    elif kind == "document":
+        if first_contact:
+            turn.say(FIRST_EXPORT_NOTE)
+        turn.on_document(payload, row["message_id"])
     elif first_contact:
         turn.welcome()
         text = payload.get("text", "") if kind == "text" else ""

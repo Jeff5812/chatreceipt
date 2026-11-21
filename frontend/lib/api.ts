@@ -98,12 +98,26 @@ interface ExtractOptions {
 
 /** Upload screenshots (in order) and read the transaction. Uses XHR for upload progress. */
 export function extractTransaction(files: File[], options: ExtractOptions): Promise<ExtractionResponse> {
+  const form = new FormData();
+  for (const file of files) form.append("files", file, file.name);
+  return upload("/api/extractions", form, options);
+}
+
+/**
+ * Upload a WhatsApp chat export (.txt or .zip) and read the transaction. ``focus`` names another deal
+ * the chat holds, to make the record for that one instead of the latest.
+ */
+export function extractChat(file: File, focus: string, options: ExtractOptions): Promise<ExtractionResponse> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  if (focus) form.append("focus", focus);
+  return upload("/api/extractions/chat", form, options);
+}
+
+function upload(path: string, form: FormData, options: ExtractOptions): Promise<ExtractionResponse> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    const form = new FormData();
-    for (const file of files) form.append("files", file, file.name);
-
-    xhr.open("POST", `${API_URL}/api/extractions`);
+    xhr.open("POST", `${API_URL}${path}`);
     xhr.responseType = "json";
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) options.onUploadProgress(event.loaded / event.total);

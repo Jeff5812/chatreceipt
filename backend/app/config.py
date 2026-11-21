@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     max_files: int = 10
     max_file_bytes: int = 10 * 1024 * 1024
     max_total_bytes: int = 40 * 1024 * 1024
+    # WhatsApp chat exports: the whole file (a ZIP may hold photos and voice notes), and its chat text.
+    # Only the last 600 messages are read, so a longer text isn't worth accepting.
+    max_chat_export_bytes: int = 30 * 1024 * 1024
+    max_chat_text_bytes: int = 4 * 1024 * 1024
 
     # Rate limits, per client IP, kept in memory.
     extraction_rate_limit: int = 12

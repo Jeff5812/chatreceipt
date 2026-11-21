@@ -5,7 +5,7 @@ import { Logo } from "../brand";
 import { Button } from "../ui/button";
 import { CheckIcon } from "../ui/icons";
 
-const STEPS = ["Screenshots", "Review", "Record"] as const;
+const STEPS = ["Upload", "Review", "Record"] as const;
 
 export function WorkflowHeader({
   step,

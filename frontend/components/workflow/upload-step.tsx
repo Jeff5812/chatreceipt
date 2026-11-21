@@ -1,13 +1,13 @@
 "use client";
 
 import { useRef, useState, type DragEvent } from "react";
-import { checkFiles } from "@/lib/files";
+import { chatNameFrom, checkChatExport, checkFiles, isChatExport } from "@/lib/files";
 import { formatBytes } from "@/lib/money";
 import type { PublicConfig, Screenshot } from "@/lib/types";
 import { Mascot } from "../mascot";
 import { PHONE, PixelArt } from "../pixel-art";
 import { ArrowChip, Button } from "../ui/button";
-import { ArrowLeftIcon, ArrowRightIcon, CloseIcon } from "../ui/icons";
+import { ArrowLeftIcon, ArrowRightIcon, ChatIcon, CloseIcon } from "../ui/icons";
 import { WhatsAppButton } from "../whatsapp-button";
 import { Notice } from "./notice";
 import { StepHeading } from "./step-heading";
@@ -17,7 +17,10 @@ interface UploadStepProps {
   configError: string | null;
   onRetryConfig: () => void;
   screenshots: Screenshot[];
+  chatExport: File | null;
   onAdd: (files: File[]) => void;
+  onUseChatExport: (file: File) => void;
+  onRemoveChatExport: () => void;
   onRemove: (id: string) => void;
   onMove: (id: string, offset: -1 | 1) => void;
   onExtract: () => void;
@@ -52,19 +55,72 @@ function TrayIllustration({ active }: { active: boolean }) {
   );
 }
 
+/** A chat export and screenshots are read separately: switching from one to the other is asked first. */
+type Swap = { kind: "export"; file: File } | { kind: "screenshots"; files: File[] };
+
+/** How to make a chat export, for Android and iPhone. */
+function ExportHelp() {
+  return (
+    <details className="group/help border border-line bg-surface px-4 py-3 text-sm shadow-e1">
+      <summary className="cursor-pointer list-none font-medium select-none">
+        <span className="pixel-label mr-2 text-accent group-open/help:hidden">+</span>
+        <span className="pixel-label mr-2 hidden text-accent group-open/help:inline">-</span>
+        How to export a WhatsApp chat
+      </summary>
+      <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-muted">
+        <li>Open the chat in WhatsApp.</li>
+        <li>
+          Android: tap <span className="text-ink">⋮ › More › Export chat</span>. iPhone: tap the name at the top, then{" "}
+          <span className="text-ink">Export Chat</span>.
+        </li>
+        <li>
+          Choose <span className="text-ink">Without media</span> for a small file, or <span className="text-ink">Include media</span>{" "}
+          so payment screenshots sent in the chat are read too.
+        </li>
+        <li>Save the file, then add it here.</li>
+      </ol>
+    </details>
+  );
+}
+
 export function UploadStep(props: UploadStepProps) {
-  const { config, screenshots } = props;
+  const { config, screenshots, chatExport } = props;
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [problems, setProblems] = useState<string[]>([]);
+  const [swap, setSwap] = useState<Swap | null>(null);
   const ready = config !== null;
   const canExtract = ready && config.extraction_available;
 
   function addFiles(list: FileList | null) {
     if (!config || !list) return;
-    const { accepted, problems: found } = checkFiles(Array.from(list), screenshots, config.limits);
+    const incoming = Array.from(list);
+    const exports = incoming.filter(isChatExport);
+    const images = incoming.filter((file) => !isChatExport(file));
+    setSwap(null);
+    if (exports.length > 0) {
+      const [file, ...others] = exports;
+      const found: string[] = [];
+      if (others.length > 0) found.push("Add one chat export at a time.");
+      if (images.length > 0) found.push("A chat export is read on its own, so the screenshots weren't added.");
+      const problem = checkChatExport(file, config.limits);
+      setProblems(problem ? [...found, problem] : found);
+      if (problem) return;
+      if (screenshots.length > 0) setSwap({ kind: "export", file });
+      else props.onUseChatExport(file);
+      return;
+    }
+    const { accepted, problems: found } = checkFiles(images, screenshots, config.limits);
     setProblems(found);
-    if (accepted.length > 0) props.onAdd(accepted);
+    if (accepted.length === 0) return;
+    if (chatExport !== null) setSwap({ kind: "screenshots", files: accepted });
+    else props.onAdd(accepted);
+  }
+
+  function confirmSwap() {
+    if (swap?.kind === "export") props.onUseChatExport(swap.file);
+    else if (swap?.kind === "screenshots") props.onAdd(swap.files);
+    setSwap(null);
   }
 
   function onDrop(event: DragEvent<HTMLDivElement>) {
@@ -74,14 +130,17 @@ export function UploadStep(props: UploadStepProps) {
   }
 
   const limits = config?.limits;
-  const hasFiles = screenshots.length > 0;
+  const hasFiles = screenshots.length > 0 || chatExport !== null;
+  const otherPerson = chatExport ? chatNameFrom(chatExport.name) : "";
+  const exportLimit = limits?.max_chat_export_bytes ? ` · chat export up to ${formatBytes(limits.max_chat_export_bytes)}` : "";
+  const acceptedTypes = [...(limits?.accepted_types ?? ["image/*"]), ".txt", ".zip", "text/plain", "application/zip"].join(",");
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-10 sm:px-6 sm:py-14">
-      <StepHeading focus={props.focusHeading}>Add your screenshots</StepHeading>
+      <StepHeading focus={props.focusHeading}>Add the conversation</StepHeading>
       <p className="mt-4 max-w-2xl text-lg leading-relaxed text-muted">
-        Add screenshots of the conversation in the order it happened. Include the messages where the price,
-        delivery and payment were discussed.
+        Add screenshots of the conversation in the order it happened, or the chat itself exported from WhatsApp.
+        Include the messages where the price, delivery and payment were discussed.
       </p>
 
       <div className="mt-8 space-y-4 empty:hidden">
@@ -106,7 +165,7 @@ export function UploadStep(props: UploadStepProps) {
         {props.extractError && (
           <Notice
             tone="error"
-            title="The screenshots couldn't be read"
+            title={chatExport ? "The chat couldn't be read" : "The screenshots couldn't be read"}
             action={
               <Button size="sm" variant="secondary" onClick={props.onManual}>
                 Enter the details yourself
@@ -118,7 +177,36 @@ export function UploadStep(props: UploadStepProps) {
         )}
       </div>
 
-      {hasFiles && (
+      {chatExport && (
+        <section aria-label="Chat export" className="mt-8">
+          <div className="flex items-center gap-4 border border-line bg-surface px-4 py-3.5 shadow-e1 sm:px-5">
+            <span className="flex size-10 shrink-0 items-center justify-center bg-accent text-accent-ink" aria-hidden>
+              <ChatIcon className="size-5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-ui font-medium">{chatExport.name}</p>
+              <p className="text-meta text-muted">
+                WhatsApp chat export · {formatBytes(chatExport.size)}
+                {otherPerson ? ` · chat with ${otherPerson}` : ""}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={props.onRemoveChatExport}
+              aria-label="Remove the chat export"
+              className={`${TINY_CONTROL} relative shrink-0 rounded-none`}
+            >
+              <CloseIcon className="size-3.5" />
+            </button>
+          </div>
+          <p className="mt-2 text-meta text-muted">
+            The whole chat is read, and the most recent deal becomes the record. Other deals in it are listed so you can
+            pick one.
+          </p>
+        </section>
+      )}
+
+      {screenshots.length > 0 && (
         <section aria-label="Screenshots in order" className="mt-8">
           <div className="flex items-baseline justify-between gap-3">
             <h2 className="text-sm font-semibold">
@@ -197,8 +285,12 @@ export function UploadStep(props: UploadStepProps) {
               </div>
             </div>
             <div className="relative min-w-0 flex-1">
-              <p className="text-ui font-medium">{dragging ? "Drop to add them" : "Add more screenshots"}</p>
-              <p className="text-meta text-muted">{limits ? `Up to ${limits.max_files} · JPEG, PNG or WebP` : "JPEG, PNG or WebP"}</p>
+              <p className="text-ui font-medium">
+                {dragging ? "Drop to add them" : chatExport ? "Use a different chat export" : "Add more screenshots"}
+              </p>
+              <p className="text-meta text-muted">
+                {chatExport ? "A .txt or .zip file from WhatsApp" : limits ? `Up to ${limits.max_files} · JPEG, PNG or WebP` : "JPEG, PNG or WebP"}
+              </p>
             </div>
             <Button className="relative shrink-0" size="sm" variant="secondary" disabled={!ready} onClick={() => inputRef.current?.click()}>
               Choose
@@ -209,14 +301,16 @@ export function UploadStep(props: UploadStepProps) {
             <div className="relative">
               <TrayIllustration active={dragging} />
             </div>
-            <p className="relative mt-6 text-ui font-medium">{dragging ? "Drop to add them" : "Drag screenshots here, or"}</p>
+            <p className="relative mt-6 text-ui font-medium">
+              {dragging ? "Drop to add them" : "Drag screenshots or a chat export here, or"}
+            </p>
             <Button className="relative mt-3" variant="secondary" disabled={!ready} onClick={() => inputRef.current?.click()}>
-              Choose screenshots
+              Choose files
             </Button>
             <p className="relative mt-4 text-meta text-muted">
               {limits
-                ? `JPEG, PNG or WebP · up to ${limits.max_files} screenshots · ${formatBytes(limits.max_file_bytes)} each`
-                : "JPEG, PNG or WebP"}
+                ? `JPEG, PNG or WebP · up to ${limits.max_files} screenshots · ${formatBytes(limits.max_file_bytes)} each${exportLimit}`
+                : "JPEG, PNG or WebP, or a .txt or .zip chat export"}
             </p>
           </>
         )}
@@ -225,7 +319,7 @@ export function UploadStep(props: UploadStepProps) {
         ref={inputRef}
         type="file"
         multiple
-        accept={limits?.accepted_types.join(",") ?? "image/*"}
+        accept={acceptedTypes}
         className="sr-only"
         tabIndex={-1}
         aria-hidden
@@ -234,6 +328,28 @@ export function UploadStep(props: UploadStepProps) {
           event.target.value = "";
         }}
       />
+
+      {swap && (
+        <div className="mt-4">
+          <Notice
+            title={swap.kind === "export" ? "Read the chat export instead?" : "Use the screenshots instead?"}
+            action={
+              <>
+                <Button size="sm" variant="secondary" onClick={confirmSwap}>
+                  {swap.kind === "export" ? "Use the chat export" : "Use the screenshots"}
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => setSwap(null)}>
+                  {swap.kind === "export" ? "Keep the screenshots" : "Keep the chat export"}
+                </Button>
+              </>
+            }
+          >
+            {swap.kind === "export"
+              ? `A chat export is read on its own, so the ${screenshots.length === 1 ? "screenshot" : `${screenshots.length} screenshots`} you added would be removed.`
+              : "Screenshots and a chat export are read separately, so the chat export would be removed."}
+          </Notice>
+        </div>
+      )}
 
       {problems.length > 0 && (
         <div className="mt-4">
@@ -258,10 +374,10 @@ export function UploadStep(props: UploadStepProps) {
           {canExtract && (
             <Button
               variant={props.onResume ? "secondary" : "primary"}
-              disabled={screenshots.length === 0}
+              disabled={!hasFiles}
               onClick={props.onExtract}
             >
-              {props.onResume ? "Read the screenshots again" : "Read the conversation"}
+              {props.onResume ? (chatExport ? "Read the chat again" : "Read the screenshots again") : "Read the conversation"}
               {!props.onResume && <ArrowChip />}
             </Button>
           )}
@@ -283,6 +399,12 @@ export function UploadStep(props: UploadStepProps) {
           </Button>
         </div>
       </div>
+
+      {screenshots.length === 0 && (
+        <div className="mt-6">
+          <ExportHelp />
+        </div>
+      )}
 
       {!hasFiles && (
         <div className="mt-6 empty:hidden">

@@ -161,19 +161,40 @@ def describe(request: Request) -> str:
 
 
 def _other_party(row: Mapping[str, Any]) -> str:
+    """The person on the other side of a record from the customer, when their side is known."""
+    role = row.get("owner_role")
+    if role == "seller":
+        return row["buyer"] or "Someone"
+    if role == "buyer":
+        return row["seller"] or "Someone"
     return row["buyer"] or row["seller"] or "Someone"
 
 
-def owed_text(rows: Sequence[Mapping[str, Any]], heading: str) -> str:
-    """Who still owes what, from records with an outstanding amount."""
-    lines = [f"*Still owed {heading}*".replace("  ", " ").replace(" *", "*")]
+def _owed_lines(rows: Sequence[Mapping[str, Any]], title: str, total_label: str) -> list[str]:
+    lines = [title.replace("  ", " ").replace(" *", "*")]
     totals: dict[str, Decimal] = defaultdict(Decimal)
     for row in rows:
         currency = get_currency(row["currency"])
         lines.append(f"• {_other_party(row)}: {money(row['outstanding'], currency)} ({row['reference']})")
         totals[row["currency"]] += Decimal(row["outstanding"])
     lines.append("")
-    lines.append("Total still owed: " + ", ".join(money(amount, get_currency(code)) for code, amount in totals.items()))
+    lines.append(f"{total_label}: " + ", ".join(money(amount, get_currency(code)) for code, amount in totals.items()))
+    return lines
+
+
+def owed_text(rows: Sequence[Mapping[str, Any]], heading: str) -> str:
+    """Who still owes what, from records with an outstanding amount.
+
+    Records where the customer was the buyer are money they owe, so they're listed on their own.
+    """
+    owed_to_them = [row for row in rows if row.get("owner_role") != "buyer"]
+    they_owe = [row for row in rows if row.get("owner_role") == "buyer"]
+    lines: list[str] = []
+    if owed_to_them:
+        lines += _owed_lines(owed_to_them, f"*Still owed {heading}*", "Total still owed")
+    if they_owe:
+        lines += [""] if lines else []
+        lines += _owed_lines(they_owe, f"*You still owe {heading}*", "Total you owe")
     return "\n".join(lines)
 
 

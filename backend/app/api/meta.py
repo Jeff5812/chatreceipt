@@ -92,5 +92,6 @@ async def public_config(request: Request) -> ConfigResponse:
             max_file_bytes=settings.max_file_bytes,
             max_total_bytes=settings.max_total_bytes,
             accepted_types=sorted(ACCEPTED_FORMATS.values()),
+            max_chat_export_bytes=settings.max_chat_export_bytes,
         ),
     )

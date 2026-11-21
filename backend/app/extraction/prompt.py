@@ -34,9 +34,29 @@ order and add an ambiguity with field "screenshots".
 - Screenshots can overlap. Never count a repeated message twice.
 - A tall screenshot may arrive in overlapping parts ("Screenshot 2, part 1 of 3"). Read the parts \
 as one screenshot and cite the screenshot number.
+
+## Who is who
+- In a chat screenshot, the messages on the right (usually green or blue, sometimes marked "You") \
+were sent by the phone's owner: the person who took the screenshot. The messages on the left come \
+from the other person, whose name, username or number is at the top of the chat.
 - Work out who is selling and who is buying from what they do: the seller offers goods or \
-services and states prices; the buyer asks, negotiates and pays. Take names from the chat header \
-or the messages. If a side appears only as "You" or has no visible name, leave that name empty.
+services, states prices or receives the payment; the buyer asks, negotiates and pays.
+- owner_role: "seller" or "buyer", whichever the phone's owner is, with one of their own messages \
+as evidence. found false if you can't tell, if more than two people take part, or if the \
+screenshots aren't a chat between the two sides (such as a bank transfer receipt).
+- other_party: the other person's name exactly as the top of the chat shows it (a saved contact \
+name, a username or a phone number), with that text as evidence. found false if it isn't visible.
+- seller and buyer: each side's name as the conversation shows it. The phone's owner is rarely \
+named in their own chat, so leave their side empty rather than guess. If a side appears only as \
+"You" or has no visible name, leave that name empty.
+- A name mentioned inside a message ("tell Ada", "Ada's order", "send it to Emeka") belongs to the \
+person mentioned, not to whoever sent the message. Take a sender's name only from the top of the \
+chat, a chat export's sender label, or a message in which they name themselves.
+- people: everyone with a part in the deal, at most six: the seller and the buyer, and anyone \
+else who pays (payer), receives the money (payee), or arranges or delivers it for someone \
+(agent). Someone often pays for the buyer (a relative, an employer) or receives money for the \
+seller, so never assume the person who sends money is the buyer or the one who receives it is \
+the seller. Mark the phone's owner with is_owner, and quote the text that shows each part.
 
 ## The agreement, not the first price
 - A first price, a counter-offer, a rejected offer and a "final price" the other side hasn't \
@@ -48,6 +68,13 @@ right after the price.
 2"), changed quantities, added or removed items and cancellations through the whole conversation.
 - If you can't tell which price or quantity was agreed, leave that value empty, describe the \
 competing figures in the note and add an ambiguity.
+
+## More than one deal
+A chat can hold several separate deals: different orders on different occasions, or different \
+customers in a group. Report only the most recent deal in the fields, and list each other deal in \
+other_deals, newest first, with one plain line each ("2 bags of rice for ₦156,000, 12 November"). \
+Never combine separate deals into one record. Items added to an order before it was settled \
+belong to that order. When there is one deal, other_deals is empty.
 
 ## Items, fees and discounts
 - line_items: each product or service agreed, with a description (include variants such as \
@@ -106,8 +133,10 @@ price isn't shown.
 
 ## Payment receipts
 A screenshot of a bank transfer, POS slip or payment confirmation is a transaction: it records a \
-payment. The sender is usually the buyer and the recipient the seller. It shows what was paid, \
-not what was agreed. Record the amount as amount_paid. If its narration or remark says what the \
+payment. The sender is usually the buyer and the recipient the seller, but not always: when the \
+sender's name isn't the buyer's, list the sender in people as payer, say in notes who paid (such \
+as "Paid by Ngozi Okafor for the buyer.") and keep the buyer as the chat shows. It shows what was \
+paid, not what was agreed. Record the amount as amount_paid. If its narration or remark says what the \
 payment was for ("advance for logo work"), add one line item with that description, quantity 1 \
 and an empty unit_price. Set payment_status to partially_paid when it's called an advance, \
 deposit or part payment, paid only when the conversation says it settles the full price, and \

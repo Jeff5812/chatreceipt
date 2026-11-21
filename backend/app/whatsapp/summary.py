@@ -21,6 +21,7 @@ from app.currencies import Currency, format_money, get_currency
 from app.documents.render import STATUS_LABELS, format_date
 from app.models import Calculation, PaymentStatus, TransactionDraft
 from app.whatsapp.messages import BUTTON_BODY_LIMIT, button_message, reply_id, text_message
+from app.whatsapp.parties import marker
 from app.whatsapp.reconcile import CONFLICT_CODES, proposal, single_simple_item
 
 MAX_ITEMS_SHOWN = 15
@@ -111,7 +112,8 @@ def checks_for(
     checks: list[str] = []
     duplicate = review.get("duplicate_reference")
     if duplicate:
-        checks.append(f"You already saved a record from this screenshot ({duplicate}). Save again only if this is a separate transaction.")
+        source = "chat export" if review.get("source") == "chat_export" else "screenshot"
+        checks.append(f"You already saved a record from this {source} ({duplicate}). Save again only if this is a separate transaction.")
     checks += [message for _, message in open_reasons(review, edited)]
     checks += [
         issue.message
@@ -189,13 +191,35 @@ def _date_text(draft: TransactionDraft, review: Mapping[str, Any], edited: Seque
     return f"{readable_date(draft.transaction_date)}{source}"
 
 
+def _party_line(draft: TransactionDraft, side: str, review: Mapping[str, Any], edited: Sequence[str]) -> str:
+    """A name on the draft, with where it came from when ChatReceipt filled it in."""
+    name = getattr(draft, side).strip()
+    source = marker(review.get("parties") or {}, side, _was_edited(side, edited)) if name else ""
+    return f"*{side.capitalize()}:* {name or 'Not found'}{source}{_mark(side, edited)}"
+
+
+def _other_deals(review: Mapping[str, Any]) -> list[str]:
+    """Other deals the chat export holds, each one a message away from its own receipt."""
+    deals = [str(deal) for deal in review.get("other_deals") or [] if str(deal).strip()]
+    if not deals:
+        return []
+    focus = str(review.get("focus") or "")
+    lines = ["", "*Other deals in this chat*"]
+    lines += [f"{number}. {deal[:120]}{' _(this record)_' if deal == focus else ''}" for number, deal in enumerate(deals, start=1)]
+    if review.get("source") == "chat_export":
+        lines.append("Send *deal 1* (or 2, 3) for a receipt of one of them.")
+    else:
+        lines.append("For a receipt of one of them, send only its screenshots.")
+    return lines
+
+
 def describe(draft: TransactionDraft, calculation: Calculation, review: Mapping[str, Any], edited: Sequence[str]) -> str:
     currency = get_currency(draft.currency)
-    lines = [
-        f"*Seller:* {draft.seller.strip() or 'Not found'}{_mark('seller', edited)}",
-        f"*Buyer:* {draft.buyer.strip() or 'Not found'}{_mark('buyer', edited)}",
-        f"*Date:* {_date_text(draft, review, edited)}{_mark('transaction_date', edited)}",
-    ]
+    lines = [_party_line(draft, "seller", review, edited), _party_line(draft, "buyer", review, edited)]
+    paid_by = str((review.get("parties") or {}).get("paid_by") or "").strip()
+    if paid_by:
+        lines.append(f"*Paid by:* {paid_by[:120]}")
+    lines.append(f"*Date:* {_date_text(draft, review, edited)}{_mark('transaction_date', edited)}")
     if draft.due_date:
         lines.append(f"*Due:* {readable_date(draft.due_date)}{_mark('due_date', edited)}")
     if currency is None:
@@ -224,6 +248,7 @@ def describe(draft: TransactionDraft, calculation: Calculation, review: Mapping[
     if written:
         lines.append("")
         lines += [f"*{title}:* {text[:200]}" for title, text in written]
+    lines += _other_deals(review)
     lines += _problems(draft, calculation, review, edited)
     return "\n".join(lines)
 

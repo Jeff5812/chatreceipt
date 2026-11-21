@@ -20,6 +20,7 @@ class FakeProvider:
         self.error = error
         self._configured = configured
         self.calls: list[list[PreparedImage]] = []
+        self.requests: list[Any] = []  # requests made through generate(), such as chat exports
 
     @property
     def configured(self) -> bool:
@@ -34,6 +35,12 @@ class FakeProvider:
             usage=ProviderUsage(model="fake-model", input_tokens=1200, output_tokens=800),
             duration_ms=3,
         )
+
+    async def generate(self, request: Any) -> ProviderResponse:
+        self.requests.append(request)
+        if self.error is not None:
+            raise self.error
+        return ProviderResponse(data=self.data, usage=ProviderUsage(model="fake-model", input_tokens=900, output_tokens=700), duration_ms=3)
 
     async def aclose(self) -> None:
         return None

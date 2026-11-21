@@ -18,7 +18,25 @@ against the real AI.
 | Bundle price ("3 for ₦2,000") | One line for the bundle, not a unit price | `test_negotiation_rules.py` |
 | Cancellation, or a deal reinstated after cancelling | Agreement marked cancelled, or reached again | Evaluation cases `cancel-01` to `cancel-06` |
 | Two separate orders in one chat | Two records | `test_engine_pipeline.py` |
+| Two separate orders in one screenshot set or chat export | The latest becomes the draft; the others are listed, and an export can be read again for one ("deal 1"), keeping the same numbers | `test_chat_export_api.py`, `test_whatsapp_identity.py` |
 | No transaction in the chat | No record, with an explanation | `test_engine_pipeline.py` |
+
+## Who is who
+
+| Situation | Behaviour | Tests |
+| --- | --- | --- |
+| The customer's own name isn't in their chat (it never is) | Asked once on Confirm, with their WhatsApp name or export name one tap away; remembered after that | `test_whatsapp_identity.py`, `test_parties.py` |
+| The chat doesn't show which side the customer is on | One question with their usual role first; "Neither" saves without placing them | `test_whatsapp_identity.py` |
+| The customer skips the name question twice | Never asked again; "my name is …" still works | `test_whatsapp_identity.py` |
+| The model gives the customer's side the other person's name | Nothing is moved and the names are flagged; saying their side swaps them | `test_parties.py` |
+| The model is unsure which side the customer is on | Its guess isn't used; the customer is asked instead | `test_parties.py` |
+| Only a phone number at the top of the chat | The number is kept, never replaced by an invented name | `test_whatsapp_identity.py` |
+| A returning customer's contact | Their confirmed name is filled by phone number, or suggested by label, and marked | `test_whatsapp_identity.py`, `test_parties.py` |
+| The chat names someone differently from an earlier receipt | Shown under "Please check"; nothing is overwritten silently | `test_whatsapp_identity.py`, `test_parties.py` |
+| Two different people with the same contact name | Never merged; that label then suggests nobody | `test_whatsapp_identity.py` |
+| Someone pays for the buyer (a sister, an employer) | Recorded as payer, shown as *Paid by*; the buyer stays as the chat shows | `test_chat_export_api.py`, `test_whatsapp_identity.py` |
+| A name mentioned inside a message ("Ada's order") | Belongs to the person mentioned, not the sender (an AI rule; checked in the evaluation) | `evals/cases.json` |
+| The customer was the buyer on a record | "Who still owes me?" lists it as money they owe, not money owed to them | `test_whatsapp_identity.py`, `test_parties.py` |
 
 ## Payments
 
@@ -53,7 +71,12 @@ against the real AI.
 | Screenshots in the wrong order, or with gaps | Order kept as uploaded and flagged | `test_conversations.py` |
 | Export dates that could be day/month or month/day | Read by `TEXT_DATES_DAY_FIRST` and flagged unless the chat proves the format | `test_conversations.py` |
 | Text with no chat format | Split into messages by the AI and flagged: who said what must be checked | `test_conversations.py` |
-| Very long chats | Only the last messages are read, and the record says so | Not covered by a test yet |
+| Very long chats | Only the last 600 messages are read, and the record says so | `test_chat_import.py` |
+| Android and iPhone chat exports, multi-line messages, system lines | Parsed without AI, with sender labels and timestamps kept | `test_chat_import.py` |
+| A chat export ZIP with photos | Photos sent with the latest messages are read with the chat; voice notes and other media are counted, not read | `test_chat_import.py`, `test_chat_export_api.py` |
+| A group chat export | Read, but its name never decides who the owner is | `test_chat_import.py` |
+| An export without the usual file name | The owner stays unknown unless the customer's own name matches one sender, and no name is placed by role | `test_chat_import.py`, `test_chat_export_api.py` |
+| A screenshot sent while a chat export is read, or onto its draft | Never mixed in; the customer chooses a new record or keeps the draft | `test_whatsapp_identity.py` |
 | "Today" or "Yesterday" in a screenshot | Resolved against when it was sent, in the customer's time zone | `test_extraction.py`, `test_whatsapp_understanding.py` |
 
 ## Records, review and receipts
@@ -78,7 +101,11 @@ against the real AI.
 | Oversized files, too many files | Refused with a message saying what to do | `test_uploads.py` |
 | HEIC photos | Refused in the browser, with a suggestion to send a screenshot instead | Not covered by a test yet |
 | Unsigned or wrongly signed WhatsApp webhooks | Refused | `test_whatsapp_units.py` |
-| The same WhatsApp message delivered twice | Handled once | `test_whatsapp_flow.py` |
+| The same WhatsApp message delivered twice | Handled once | `test_whatsapp_flow.py`, `test_whatsapp_identity.py` |
+| The same chat export sent twice | Not read again | `test_whatsapp_identity.py` |
+| A ZIP with `../` paths, a drive letter, a password, thousands of files or a huge compression ratio | Refused before anything is extracted; nothing is written to disk | `test_chat_import.py`, `test_chat_export_api.py`, `test_whatsapp_identity.py` |
+| A document file name with a path in it | Only the base name is kept | `test_parties.py` |
+| "Clear history" | The open draft, closed drafts and the remembered conversation are emptied; saved records stay | `test_whatsapp_identity.py` |
 | A visitor forging `X-Forwarded-For` to dodge rate limits | Ignored behind a proxy | `test_client_address.py` |
 | Errors and logs | No conversation text, phone numbers or query strings | `test_engine_security.py`, `test_whatsapp_units.py` |
 | A customer asks to delete their data | Everything for that customer is erased | `test_engine_security.py`, `test_whatsapp_flow.py` |

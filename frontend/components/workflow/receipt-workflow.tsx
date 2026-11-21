@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { extractTransaction, getConfig, isAbortError, messageOf } from "@/lib/api";
+import { extractChat, extractTransaction, getConfig, isAbortError, messageOf } from "@/lib/api";
 import { cheer } from "@/lib/chit";
 import { countChanges, emptyDraft } from "@/lib/draft";
 import { EXAMPLE_EXTRACTION, EXAMPLE_SCREENSHOT } from "@/lib/example";
@@ -13,7 +13,7 @@ import { UploadStep } from "./upload-step";
 import { WorkflowHeader } from "./workflow-header";
 
 type Stage = "upload" | "extracting" | "review" | "preview";
-type Origin = "screenshots" | "manual" | "example";
+type Origin = "screenshots" | "chat_export" | "manual" | "example";
 
 let screenshotCounter = 0;
 
@@ -26,6 +26,8 @@ export function ReceiptWorkflow() {
   const [stage, setStage] = useState<Stage>("upload");
   const [navigated, setNavigated] = useState(false);
   const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
+  // A WhatsApp chat export is read on its own, never together with screenshots.
+  const [chatExport, setChatExport] = useState<File | null>(null);
   const [origin, setOrigin] = useState<Origin>("screenshots");
   const [extraction, setExtraction] = useState<ExtractionResponse | null>(null);
   const [draft, setDraft] = useState<TransactionDraft | null>(null);
@@ -54,7 +56,7 @@ export function ReceiptWorkflow() {
     };
   }, []);
 
-  const hasWork = draft !== null || screenshots.length > 0;
+  const hasWork = draft !== null || screenshots.length > 0 || chatExport !== null;
   useEffect(() => {
     if (!hasWork) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
@@ -68,6 +70,11 @@ export function ReceiptWorkflow() {
     window.scrollTo({ top: 0 });
   }
 
+  function clearScreenshots() {
+    for (const shot of screenshots) if (shot.file) URL.revokeObjectURL(shot.url);
+    setScreenshots([]);
+  }
+
   function addScreenshots(files: File[]) {
     const added = files.map((file) => {
       const url = URL.createObjectURL(file);
@@ -76,7 +83,14 @@ export function ReceiptWorkflow() {
       return { id: `shot-${screenshotCounter}`, name: file.name, size: file.size, url, file };
     });
     setExtractError(null);
+    setChatExport(null);
     setScreenshots((current) => [...current, ...added]);
+  }
+
+  function chooseChatExport(file: File) {
+    clearScreenshots();
+    setExtractError(null);
+    setChatExport(file);
   }
 
   function removeScreenshot(id: string) {
@@ -104,10 +118,11 @@ export function ReceiptWorkflow() {
     go("review");
   }
 
-  async function extract() {
+  async function extract(focus = "") {
     const files = screenshots.flatMap((shot) => (shot.file ? [shot.file] : []));
-    if (files.length === 0) return;
-    if (draft !== null && !window.confirm("Reading the screenshots again replaces the details you've reviewed. Continue?")) {
+    if (chatExport === null && files.length === 0) return;
+    const what = chatExport !== null ? "the chat" : "the screenshots";
+    if (draft !== null && !window.confirm(`Reading ${what} again replaces the details you've reviewed. Continue?`)) {
       return;
     }
     const controller = new AbortController();
@@ -115,13 +130,19 @@ export function ReceiptWorkflow() {
     setExtractError(null);
     setProgress({ phase: "uploading", fraction: 0 });
     go("extracting");
+    const options = {
+      signal: controller.signal,
+      onUploadProgress: (fraction: number) => setProgress({ phase: "uploading", fraction }),
+      onUploaded: () => setProgress({ phase: "reading", fraction: 1 }),
+    };
     try {
-      const result = await extractTransaction(files, {
-        signal: controller.signal,
-        onUploadProgress: (fraction) => setProgress({ phase: "uploading", fraction }),
-        onUploaded: () => setProgress({ phase: "reading", fraction: 1 }),
-      });
-      startDraft("screenshots", result, result.draft);
+      if (chatExport !== null) {
+        const result = await extractChat(chatExport, focus, options);
+        startDraft("chat_export", result, result.draft);
+      } else {
+        const result = await extractTransaction(files, options);
+        startDraft("screenshots", result, result.draft);
+      }
     } catch (error) {
       if (!isAbortError(error)) {
         setExtractError(messageOf(error));
@@ -145,10 +166,10 @@ export function ReceiptWorkflow() {
   }
 
   function startOver() {
-    if (hasWork && !window.confirm("Start over? Your screenshots and details will be cleared.")) return;
+    if (hasWork && !window.confirm("Start over? Your screenshots or chat and the details will be cleared.")) return;
     abortRef.current?.abort();
-    for (const shot of screenshots) if (shot.file) URL.revokeObjectURL(shot.url);
-    setScreenshots([]);
+    clearScreenshots();
+    setChatExport(null);
     setExtraction(null);
     setDraft(null);
     setOrigin("screenshots");
@@ -165,7 +186,7 @@ export function ReceiptWorkflow() {
   const reviewScreenshots = origin === "example" ? [EXAMPLE_SCREENSHOT] : origin === "screenshots" ? screenshots : [];
   const changes = draft ? countChanges(draft, extraction?.draft ?? null, extraction?.field_meta ?? {}) : null;
   const stats = {
-    from_extraction: origin === "screenshots",
+    from_extraction: origin === "screenshots" || origin === "chat_export",
     edited_fields: changes?.edited ?? 0,
     added_fields: changes?.added ?? 0,
   };
@@ -183,10 +204,13 @@ export function ReceiptWorkflow() {
               setConfigAttempt((n) => n + 1);
             }}
             screenshots={screenshots}
+            chatExport={chatExport}
             onAdd={addScreenshots}
+            onUseChatExport={chooseChatExport}
+            onRemoveChatExport={() => setChatExport(null)}
             onRemove={removeScreenshot}
             onMove={moveScreenshot}
-            onExtract={extract}
+            onExtract={() => extract()}
             onManual={enterManually}
             onExample={openExample}
             onResume={draft !== null ? () => go("review") : null}
@@ -198,7 +222,8 @@ export function ReceiptWorkflow() {
           <ExtractingView
             phase={progress.phase}
             fraction={progress.fraction}
-            screenshots={screenshots}
+            screenshots={chatExport !== null ? [] : screenshots}
+            chatExport={chatExport}
             onCancel={() => abortRef.current?.abort()}
           />
         )}
@@ -210,6 +235,8 @@ export function ReceiptWorkflow() {
             extraction={extraction}
             isExample={origin === "example"}
             screenshots={reviewScreenshots}
+            chatExport={origin === "chat_export" ? chatExport : null}
+            onReadDeal={origin === "chat_export" && chatExport !== null ? (deal) => extract(deal) : null}
             acknowledged={acknowledged}
             onAcknowledge={setAcknowledged}
             onBack={() => go("upload")}

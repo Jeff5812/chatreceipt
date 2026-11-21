@@ -55,6 +55,8 @@ class RecordSummary(BaseModel):
     outstanding: str | None
     payment_status: PaymentStatus
     created_at: datetime
+    # The side the customer was on, when it was known: "seller", "buyer", or None.
+    owner_role: str | None = None
 
 
 class RecordList(BaseModel):
@@ -121,6 +123,7 @@ def _summary(row: store.Row) -> RecordSummary:
         outstanding=_text(row["outstanding"]),
         payment_status=row["payment_status"],
         created_at=row["created_at"],
+        owner_role=row.get("owner_role"),
     )
 
 

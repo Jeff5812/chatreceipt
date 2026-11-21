@@ -30,9 +30,13 @@ from app.extraction.schema import (
     AIAdjustment,
     AIEvidence,
     DAY_LABELS,
+    OWNER_ROLES,
+    PERSON_ROLES,
     AIExtraction,
     AIField,
     AILineItem,
+    AIOtherDeal,
+    AIPerson,
 )
 from app.models import (
     AdjustmentDraft,
@@ -41,10 +45,14 @@ from app.models import (
     ExtractionResponse,
     FieldMeta,
     LineItemDraft,
+    OtherDeal,
+    Parties,
+    Person,
     PaymentStatus,
     ReviewReason,
     TransactionDraft,
 )
+from app.names import phone_in_label, same_name
 from app.observability import log_event
 from app.uploads import PreparedImage
 
@@ -160,6 +168,57 @@ class _Mapper:
             self.record(key, FIELD_LABELS[key], False, field.confidence, [], "The chat only shows this side as “You”, so no name was recorded.")
             return ""
         return self.text(key, field, 120)
+
+    def parties(self, draft: TransactionDraft, owner: AIField, other: AIField) -> tuple[TransactionDraft, Parties]:
+        """Which side the phone's owner is on, with the other side's name put in the other role.
+
+        The name at the top of a chat is the other person's, so it can only go in the role the owner
+        doesn't have. When the model gives the owner that very name, one of its readings is wrong:
+        nothing is moved, the role is left unknown, and the person is asked to check.
+        """
+        other_name = clean_text(other.value, 120) if other.found else ""
+        if other_name.strip(".").lower() in _NOT_NAMES:
+            other_name = ""
+        role = owner.value.strip().lower() if owner.found and owner.confidence in ("high", "medium") else ""
+        if role not in OWNER_ROLES:
+            role = ""
+        if not role or not other_name:
+            return draft, Parties(owner_role=role, other_party=other_name)  # type: ignore[arg-type]
+        theirs = "buyer" if role == "seller" else "seller"
+        if same_name(getattr(draft, role), other_name):
+            self.reason("seller", "Check the seller and the buyer: they may be the wrong way round.")
+            return draft, Parties(owner_role="", other_party=other_name)
+        if not getattr(draft, theirs).strip():
+            draft = draft.model_copy(update={theirs: other_name})
+            self.record(theirs, FIELD_LABELS[theirs], True, other.confidence, other.evidence, "The name at the top of the chat.")
+        return draft, Parties(owner_role=role, other_party=other_name)  # type: ignore[arg-type]
+
+    def people(self, people: Sequence[AIPerson]) -> list[Person]:
+        """The people with a part in the deal. A role the schema doesn't know becomes "other"."""
+        found: list[Person] = []
+        for person in people[:6]:
+            name = clean_text(person.name, 120)
+            if name.strip(".").lower() in _NOT_NAMES:
+                name = ""
+            if not name and not person.is_owner:
+                continue
+            role = person.role if person.role in PERSON_ROLES else "other"
+            found.append(
+                Person(
+                    name=name, role=role, is_owner=person.is_owner, phone=phone_in_label(name),  # type: ignore[arg-type]
+                    quote=clean_text(person.quote, MAX_QUOTE_CHARS),
+                )
+            )
+        return found
+
+    def other_deals(self, deals: Sequence[AIOtherDeal]) -> list[OtherDeal]:
+        found = []
+        for deal in deals[:10]:
+            summary = clean_text(deal.summary, 200)
+            key = deal.last_message.strip()
+            if summary:
+                found.append(OtherDeal(summary=summary, last_message=key if re.fullmatch(r"m\d{1,5}", key) else ""))
+        return found
 
     def currency(self, field: AIField) -> str:
         code = field.value.strip().upper() if field.found else ""
@@ -291,6 +350,8 @@ def build_extraction_response(
         # Kept on the draft, so the calculation keeps checking it until the figures agree.
         stated_outstanding=m.amount("stated_outstanding", ai.outstanding_amount),
     )
+    draft, parties = m.parties(draft, ai.owner_role, ai.other_party)
+    parties = parties.model_copy(update={"other_phone": phone_in_label(parties.other_party), "people": m.people(ai.people)})
     # A day label becomes a date only when we know the day the screenshot was sent, and the record
     # says where the date came from so the person can catch an old screenshot.
     date_label = ai.date_label.strip().lower() if ai.date_label.strip().lower() in DAY_LABELS[1:] else ""
@@ -328,6 +389,8 @@ def build_extraction_response(
         contains_transaction=ai.contains_transaction,
         summary=clean_text(ai.summary, 400),
         draft=draft,
+        parties=parties,
+        other_deals=m.other_deals(ai.other_deals),
         field_meta=m.meta,
         review_required=review_required,
         review_reasons=m.reasons,
@@ -336,6 +399,15 @@ def build_extraction_response(
         images_sent=images_sent,
         date_label=date_label if resolved is not None else "",
     )
+
+
+def parse_ai_answer(data: object) -> AIExtraction:
+    """The model's answer checked against the schema. Raises a MALFORMED provider error when it doesn't fit."""
+    try:
+        return AIExtraction.model_validate(data)
+    except ValidationError as exc:
+        # Only the count goes into the error: the details would echo conversation content.
+        raise ExtractionProviderError(ErrorKind.MALFORMED, f"the answer didn't match the schema ({exc.error_count()} problems)") from exc
 
 
 def estimate_cost_usd(usage: ProviderUsage, settings: Settings, provider: str = "anthropic") -> float:
@@ -365,13 +437,7 @@ async def run_extraction(
 
     try:
         result = await provider.extract(images)
-        try:
-            ai = AIExtraction.model_validate(result.data)
-        except ValidationError as exc:
-            # Only the count goes into the error: the details would echo conversation content.
-            raise ExtractionProviderError(
-                ErrorKind.MALFORMED, f"the answer didn't match the schema ({exc.error_count()} problems)"
-            ) from exc
+        ai = parse_ai_answer(result.data)
     except ExtractionProviderError as exc:
         log_event(
             "extraction.failed",

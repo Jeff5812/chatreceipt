@@ -12,7 +12,7 @@ The database tests start a private PostgreSQL on a free port from the installed 
 (or use `TEST_DATABASE_URL`) and never touch a real database. No test calls a real AI provider, Meta or
 any other external service: providers, WhatsApp and webhook receivers are replaced by scripted fakes.
 
-Latest full run, 2026-11-19: **611 passed** in 2 min 13 s. The slowest step is starting the private
+Latest full run, 2026-11-21: **749 passed** in 2 min 47 s. The slowest step is starting the private
 database (about 10 s); one test prints a real PDF and PNG with Chromium.
 
 | File | What it covers |
@@ -26,6 +26,8 @@ database (about 10 s); one test prints a real PDF and PNG with Chromium.
 | `test_engine_pipeline.py` | The engine end to end: jobs, retries, crashes, review, approval, receipts, duplicates, outbox |
 | `test_engine_security.py` | Tenant isolation in the database, authentication, upload attacks, injection, erasure |
 | `test_whatsapp_*.py` | The WhatsApp channel against a fake Cloud API: conversation, corrections, receipts, privacy |
+| `test_whatsapp_identity.py`, `test_parties.py` | Who is who: the customer's name and side, remembered contacts, conflicts, payers, money owed by side; chat exports sent as documents, "deal N", clear history, yes/no in context |
+| `test_chat_import.py`, `test_chat_export_api.py` | WhatsApp chat exports: Android and iPhone formats, owners, photos in ZIPs, unsafe archives, `POST /api/extractions/chat` |
 | `test_client_address.py`, `test_api_session_tool.py` | Rate-limit addresses behind a proxy; the operator session tool |
 | `test_intelligence_eval.py` | The evaluation itself: dataset rules, the split, scoring, reports, the runner, prompt leakage |
 
@@ -39,7 +41,7 @@ These call the AI provider and spend its daily allowance, so they are run on pur
 
 | Command (from `backend/`) | What it measures |
 | --- | --- |
-| `python -m evals.run` | Single-step screenshot extraction on 12 rendered chat screenshots (`evals/README.md`) |
+| `python -m evals.run` | Single-step screenshot extraction on 12 rendered chat screenshots (`evals/README.md`), including which side the phone's owner is on and the other person's name. On 2026-11-21, 3 chosen cases passed on `gemini-2.5-flash` (`--case negotiated-price --case promise-to-pay-pidgin --case usd-freelance-deposit`) |
 | `python -m evals.whatsapp_corrections` | How typed WhatsApp corrections are understood (16 messages) |
 | `python -m evals.whatsapp_transcript` | Replays the first real phone test end to end |
 | `python -m evals.run_intelligence` | The transaction intelligence engine on 119 labelled conversations (below) |

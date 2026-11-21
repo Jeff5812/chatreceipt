@@ -71,7 +71,8 @@ def setup(clean_database: str) -> Iterator[Any]:
     opened: list[Any] = []
 
     def build(
-        *outcomes: Any, graph: FakeGraph | None = None, corrections: list[Any] | None = None, dated: bool = True, **settings: Any
+        *outcomes: Any, graph: FakeGraph | None = None, corrections: list[Any] | None = None, dated: bool = True,
+        named: bool = True, **settings: Any,
     ) -> tuple[Channel, ScriptedProvider]:
         # Screenshots usually show a date. Tests about missing dates pass dated=False.
         if dated:
@@ -81,6 +82,9 @@ def setup(clean_database: str) -> Iterator[Any]:
                 else outcome
                 for outcome in (outcomes or (bag_conversation_output(),))
             )
+        # Both names known, so saving asks nothing about who is who. Tests about that pass named=False.
+        if named:
+            outcomes = tuple(_named(outcome) for outcome in (outcomes or (bag_conversation_output(),)))
         provider = ScriptedProvider(*outcomes) if corrections is None else TalkingProvider(*outcomes, corrections=corrections)
         client, channel = open_channel(clean_database, provider, graph=graph, **settings)
         opened.append(client)
@@ -91,6 +95,15 @@ def setup(clean_database: str) -> Iterator[Any]:
     yield build
     for client in opened:
         client.__exit__(None, None, None)
+
+
+def _named(outcome: Any) -> Any:
+    """An extraction with both names, the seller's and the buyer's, where the chat left them blank."""
+    if not isinstance(outcome, dict):
+        return outcome
+    names = {"seller": "Tola Bags", "buyer": "Ada Obi"}
+    blank = [side for side in names if not (outcome.get(side) or {}).get("value")]
+    return {**outcome, **{side: field(names[side]) for side in blank}}
 
 
 def saved(channel: Channel) -> list[dict[str, Any]]:
@@ -269,10 +282,10 @@ def test_an_oversized_image_is_refused_before_download(setup: Any) -> None:
 def test_other_file_types_get_a_plain_explanation(setup: Any) -> None:
     channel, provider = setup()
     channel.say(ALICE, "hi")
-    channel.deliver(channel._message(ALICE, "document", document={"id": "doc-1", "mime_type": "application/pdf"}))
+    channel.deliver(channel._message(ALICE, "document", document={"id": "doc-1", "mime_type": "application/pdf", "filename": "invoice.pdf"}))
     channel.work()
     assert provider.calls == []
-    assert "I can only read screenshots" in channel.graph.last_body()
+    assert "I can read screenshots (JPEG, PNG or WebP), WhatsApp chat exports (.txt or .zip)" in channel.graph.last_body()
 
 
 def test_the_access_token_is_never_sent_to_an_unknown_media_host(setup: Any) -> None:

@@ -86,10 +86,61 @@ export interface ReviewReason {
   message: string;
 }
 
+export type PersonRole = "seller" | "buyer" | "payer" | "payee" | "agent" | "other";
+
+/** Someone with a part in the deal, as the conversation shows them. */
+export interface Person {
+  name: string;
+  role: PersonRole;
+  is_owner: boolean;
+  phone: string;
+  quote: string;
+}
+
+/** Who is who, seen from the person whose phone the conversation came from. */
+export interface Parties {
+  owner_role: "seller" | "buyer" | "";
+  other_party: string;
+  other_phone: string;
+  people: Person[];
+}
+
+/** A separate deal in the same conversation, left out of this record. */
+export interface OtherDeal {
+  summary: string;
+  last_message: string;
+}
+
+export interface ChatParticipant {
+  key: string;
+  name: string;
+  side: "owner" | "contact" | "unknown";
+  phone: string;
+  messages: number;
+}
+
+/** What was read from a WhatsApp chat export. */
+export interface ChatSummary {
+  participants: ChatParticipant[];
+  group: boolean;
+  messages: number;
+  first_day: string;
+  last_day: string;
+  owner_source: "file_name" | "your_name" | "";
+  photos_read: number;
+  media_in_archive: number;
+  truncated: boolean;
+}
+
 export interface ExtractionResponse {
   contains_transaction: boolean;
   summary: string;
   draft: TransactionDraft;
+  // Optional so the bundled example, written before these existed, still fits.
+  source?: "screenshots" | "chat_export";
+  parties?: Parties;
+  other_deals?: OtherDeal[];
+  chat?: ChatSummary | null;
   field_meta: Record<string, FieldMeta>;
   review_required: boolean;
   review_reasons: ReviewReason[];
@@ -114,6 +165,8 @@ export interface PublicConfig {
     max_file_bytes: number;
     max_total_bytes: number;
     accepted_types: string[];
+    // A WhatsApp chat export (.txt, or .zip with media). 0 when the API predates exports.
+    max_chat_export_bytes?: number;
   };
 }
 

@@ -55,13 +55,13 @@ async def verify_webhook(request: Request) -> PlainTextResponse:
     return PlainTextResponse(challenge)
 
 
-def _store_delivery(database: Database, parsed: ParsedWebhook) -> int:
+def _store_delivery(database: Database, parsed: ParsedWebhook, business_number_id: str = "") -> int:
     stored = 0
     with database.transaction() as conn:
         for change in parsed.identity_changes:
             store.apply_identity_change(conn, change)
         for message in sorted(parsed.messages, key=lambda item: item.sent_at):
-            stored += store.record_inbound(conn, message)
+            stored += store.record_inbound(conn, message, business_number_id=business_number_id)
         for failure in parsed.failures:
             store.record_delivery_failure(conn, failure)
     return stored
@@ -86,7 +86,7 @@ async def receive_webhook(request: Request) -> dict[str, Any]:
 
     parsed = parse_webhook(payload, phone_number_id=settings.whatsapp_phone_number_id)
     try:
-        stored = await run_in_threadpool(_store_delivery, request.app.state.database, parsed)
+        stored = await run_in_threadpool(_store_delivery, request.app.state.database, parsed, settings.whatsapp_phone_number_id)
     except (DatabaseUnavailable, psycopg.Error) as exc:
         # Meta delivers again later. Only the type is logged: database errors can quote phone numbers.
         log_event("whatsapp.webhook_deferred", reason=type(exc).__name__)

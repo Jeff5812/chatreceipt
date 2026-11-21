@@ -43,13 +43,33 @@ If the transaction has changed since, the answer is `409 version_conflict` and n
 | --- | --- | --- |
 | GET | `/api/health` | Liveness: the process answers |
 | GET | `/api/health/ready` | Readiness: database reachable and migrations applied (`503` otherwise) |
-| GET | `/api/config` | Currencies, upload limits and whether screenshot reading is available |
+| GET | `/api/config` | Currencies, upload limits (including `max_chat_export_bytes`) and whether reading is available |
 | POST | `/api/extractions` | Screenshots (multipart) → proposed record with field evidence and review reasons |
+| POST | `/api/extractions/chat` | A WhatsApp chat export (multipart `file`: the `.txt`, or the `.zip` with media; optional `focus`) → the same proposed record |
 | POST | `/api/transactions/calculate` | Draft → totals, outstanding amount and validation issues |
 | POST | `/api/documents/preview` | Draft → the record as HTML |
 | POST | `/api/documents/pdf`, `/png` | Draft → the record as a file |
 
 Nothing sent to this group is stored.
+
+Both extraction endpoints answer with the same `ExtractionResponse`. Besides the draft, its evidence and
+the backend's calculation, it carries:
+
+| Field | Meaning |
+| --- | --- |
+| `source` | `"screenshots"` or `"chat_export"`. For an export, evidence `screenshot: 1` is the chat and 2 and up are photos sent in it |
+| `parties.owner_role` | `"seller"` or `"buyer"`: the side of the person whose phone the conversation came from, or `""` when the chat doesn't show it |
+| `parties.other_party`, `other_phone` | The other side's name as the top of the chat (or the export's file name) shows it, and its digits when it's a number |
+| `parties.people` | Everyone with a part in the deal: `seller`, `buyer`, `payer`, `payee`, `agent` or `other`, with `is_owner` and a supporting quote. A payer is never assumed to be the buyer |
+| `other_deals` | Other separate deals in the same conversation, newest first, left out of this record. Send one's `summary` as `focus` to read the export again for that deal |
+| `chat` | For an export: participants and which is the owner (`owner_source`: `file_name`, `your_name` or `""`), message count, first and last day, photos read, and whether only the latest 600 messages were read |
+
+`/api/extractions/chat` refuses, with a reason and nothing read: files over `MAX_CHAT_EXPORT_BYTES` (413
+`file_too_large`), chat text over `MAX_CHAT_TEXT_BYTES` (413 `text_too_large`), something that isn't a chat
+export (422 `not_a_chat_export`), and ZIPs that can't be opened (`bad_zip`), have unsafe paths
+(`zip_unsafe_path`), are password-protected (`zip_encrypted`), hold too many files (`zip_too_many_files`) or
+look like a ZIP bomb (`zip_suspicious`). Provider failures use the same codes as `/api/extractions`, worded
+for a chat.
 
 ## WhatsApp records group
 
@@ -57,7 +77,7 @@ Nothing sent to this group is stored.
 | --- | --- | --- |
 | POST | `/api/records/session` | Exchange the one-time code from a WhatsApp link for a session |
 | POST | `/api/records/session/end` | Sign out |
-| GET | `/api/records`, `/api/records/{id}` | The signed-in customer's saved records |
+| GET | `/api/records`, `/api/records/{id}` | The signed-in customer's saved records, each with `owner_role` (`"seller"`, `"buyer"` or `null` when their side wasn't known) |
 
 The WhatsApp webhook (`GET`/`POST /api/whatsapp/webhook`) is not in the OpenAPI document: Meta calls it,
 and every delivery must carry a valid `X-Hub-Signature-256` made with the app secret.

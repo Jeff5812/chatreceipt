@@ -18,7 +18,8 @@ import { ArrowChip, Button } from "../ui/button";
 import { PixelCheckbox } from "../ui/pixel-checkbox";
 import { ArrowLeftIcon } from "../ui/icons";
 import { AdjustmentsEditor } from "./adjustments-editor";
-import { Field, MoneyInput, Section, hasError, inputClass } from "./field";
+import { ChatExportCard, OtherDeals, WhoIsWho } from "./conversation-panels";
+import { EvidenceSourceContext, Field, MoneyInput, Section, chatEvidenceLabel, hasError, inputClass } from "./field";
 import { ItemsEditor } from "./items-editor";
 import { Notice } from "./notice";
 import { AMOUNT_PAID_HINTS, PaymentStatusField } from "./payment-section";
@@ -35,6 +36,9 @@ interface ReviewStepProps {
   extraction: ExtractionResponse | null;
   isExample: boolean;
   screenshots: Screenshot[];
+  // The chat export the draft was read from, and a way to read it again for another deal it holds.
+  chatExport: File | null;
+  onReadDeal: ((deal: string) => void) | null;
   acknowledged: boolean;
   onAcknowledge: (value: boolean) => void;
   onBack: () => void;
@@ -59,6 +63,8 @@ export function ReviewStep(props: ReviewStepProps) {
   );
   const [calcError, setCalcError] = useState<string | null>(null);
   const [blocked, setBlocked] = useState<string | null>(null);
+  // Which side the person is on, as the chat showed it; swapping the names swaps it too.
+  const [ownerSide, setOwnerSide] = useState<"seller" | "buyer" | "">(extraction?.parties?.owner_role ?? "");
 
   useEffect(() => {
     if (calc?.draft === draft) return;
@@ -119,10 +125,16 @@ export function ReviewStep(props: ReviewStepProps) {
   function removeRow(group: Group | "line_items", id: string) {
     change((current) => ({ ...current, [group]: (current[group] as Array<{ id: string }>).filter((row) => row.id !== id) }));
   }
+  function swapSides() {
+    change((current) => ({ ...current, seller: current.buyer, buyer: current.seller }));
+    setOwnerSide((side) => (side === "seller" ? "buyer" : side === "buyer" ? "seller" : side));
+  }
 
   const reasons = extraction?.review_reasons ?? [];
+  const fromExport = extraction?.source === "chat_export";
   const stripTitle = props.isExample ? "Example conversation" : "Your screenshots";
   const needsAcknowledgement = extraction?.review_required ?? false;
+  const youTag = (side: "seller" | "buyer") => (ownerSide === side ? "You" : undefined);
 
   function handleContinue() {
     if (!result || pending) return;
@@ -143,17 +155,18 @@ export function ReviewStep(props: ReviewStepProps) {
   }
 
   return (
+    <EvidenceSourceContext.Provider value={fromExport ? chatEvidenceLabel : (source) => `Screenshot ${source}`}>
     <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
       <Button variant="quiet" className="-ml-1 text-muted hover:text-ink" onClick={props.onBack}>
         <ArrowLeftIcon />
-        {extraction && !props.isExample ? "Back to screenshots" : "Back"}
+        {extraction && !props.isExample ? (fromExport ? "Back to the chat export" : "Back to screenshots") : "Back"}
       </Button>
 
       <div className="mt-4 max-w-3xl">
         <StepHeading focus={props.focusHeading}>Review the details</StepHeading>
         <p className="mt-4 text-lg leading-relaxed text-muted">
           {extraction
-            ? "Check each detail against your screenshots and correct anything that's wrong."
+            ? `Check each detail against your ${fromExport ? "chat" : "screenshots"} and correct anything that's wrong.`
             : "Enter what was agreed. ChatReceipt works out the totals."}
         </p>
       </div>
@@ -201,16 +214,31 @@ export function ReviewStep(props: ReviewStepProps) {
                 </ul>
               </Notice>
             )}
+            {extraction && <OtherDeals deals={extraction.other_deals ?? []} onReadDeal={props.onReadDeal} />}
           </div>
           {props.screenshots.length > 0 && (
             <div className="lg:hidden">
               <ScreenshotStrip screenshots={props.screenshots} title={stripTitle} />
             </div>
           )}
+          {fromExport && extraction?.chat && (
+            <div className="border border-line bg-surface px-4 py-3.5 shadow-e1 lg:hidden">
+              <ChatExportCard file={props.chatExport} chat={extraction.chat} />
+            </div>
+          )}
 
           <Section title="People and dates">
+            {extraction && !props.isExample && (
+              <WhoIsWho
+                extraction={extraction}
+                draft={draft}
+                ownerSide={ownerSide}
+                onFill={(side, name) => setField(side, name)}
+                onSwap={swapSides}
+              />
+            )}
             <div className="grid gap-x-6 gap-y-5 sm:grid-cols-2">
-              <Field label="Seller" path="seller" {...info("seller")}>
+              <Field label="Seller" path="seller" tag={youTag("seller")} {...info("seller")}>
                 <input
                   id={fieldId("seller")}
                   className={inputClass(issuesAt("seller"))}
@@ -221,7 +249,7 @@ export function ReviewStep(props: ReviewStepProps) {
                   onChange={(event) => setField("seller", event.target.value)}
                 />
               </Field>
-              <Field label="Buyer" path="buyer" {...info("buyer")}>
+              <Field label="Buyer" path="buyer" tag={youTag("buyer")} {...info("buyer")}>
                 <input
                   id={fieldId("buyer")}
                   className={inputClass(issuesAt("buyer"))}
@@ -392,6 +420,11 @@ export function ReviewStep(props: ReviewStepProps) {
               <ScreenshotStrip screenshots={props.screenshots} title={stripTitle} />
             </div>
           )}
+          {fromExport && extraction?.chat && (
+            <div className="hidden border border-line bg-surface px-5 py-4 shadow-e1 lg:block">
+              <ChatExportCard file={props.chatExport} chat={extraction.chat} />
+            </div>
+          )}
           {/* Only the totals and the button stay in view while scrolling, so the button is never pushed off a short screen. */}
           <div className="space-y-4 lg:sticky lg:top-24">
             <TotalsPanel
@@ -436,5 +469,6 @@ export function ReviewStep(props: ReviewStepProps) {
         </aside>
       </div>
     </div>
+    </EvidenceSourceContext.Provider>
   );
 }

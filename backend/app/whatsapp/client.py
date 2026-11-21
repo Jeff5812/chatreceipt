@@ -154,8 +154,12 @@ class WhatsAppClient:
             return True
         return parts.scheme == "https" and any(host.endswith(suffix) for suffix in _MEDIA_HOST_SUFFIXES)
 
-    async def download_media(self, media_id: str, *, max_bytes: int) -> bytes:
-        """Fetch an image by its media ID. The download URL lasts minutes, so it's requested each time."""
+    async def download_media(self, media_id: str, *, max_bytes: int, allowed_types: frozenset[str] | None = None) -> bytes:
+        """Fetch an image (or another allowed type, such as a chat export) by its media ID.
+
+        The download URL lasts minutes, so it's requested each time. The content is checked again by
+        whoever reads it: the type Meta reports is only a first filter.
+        """
         try:
             meta = await self._client().get(f"{self._base}/{media_id}", headers=self._auth())
         except httpx.HTTPError as exc:
@@ -169,7 +173,7 @@ class WhatsAppClient:
             file_size = int(info.get("file_size") or 0)
         except (ValueError, KeyError, TypeError) as exc:
             raise MediaError("media_lookup_failed", retryable=True) from exc
-        if mime_type and mime_type not in IMAGE_TYPES:
+        if mime_type and mime_type not in (allowed_types or IMAGE_TYPES):
             raise MediaError("media_type_rejected", retryable=False)
         if file_size > max_bytes:
             raise MediaError("media_too_large", retryable=False)

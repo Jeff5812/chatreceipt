@@ -31,6 +31,9 @@ You must distinguish between:
 10. Preserve meaningful product descriptions and variants.
 11. Identify ambiguity.
 12. Provide evidence references for extracted fields where possible.
+13. Work out who is who from what each side does, not from who sends or receives money: a relative or employer often pays for the buyer.
+14. A name mentioned inside a message ("tell Ada", "Ada's order") belongs to the person mentioned, not to the sender.
+15. Never combine separate deals in one conversation into one record.
 
 ## Example
 
@@ -93,6 +96,35 @@ Each extracted field should support:
 Use `null` for unavailable information.
 
 Do not create fake values to fill required fields.
+
+### Who is who, and other deals (added 2026-11-20)
+
+The object also carries, each optional so an older answer still validates:
+
+- `owner_role`: `"seller"` or `"buyer"`, the side of the phone's owner, whose messages are on the right
+  (in an export, the sender marked as the owner), with one of their messages as evidence. Not found when it
+  can't be told, in a group, or when the screenshots aren't a chat between the two sides.
+- `other_party`: the other person's name, username or number exactly as the top of the chat shows it.
+- `people`: up to six people with a part in the deal, each with a `role` (`seller`, `buyer`, `payer`,
+  `payee`, `agent` or `other`), `is_owner` and a short quote.
+- `other_deals`: other separate deals, newest first, one plain line each, with the export message key of
+  each one's last message. The fields describe only the most recent deal, or the one the request names.
+
+The backend, not the model, decides what these mean for the record:
+
+- The other party's name can only go on the side the owner isn't on. When the model gives the owner that
+  same name, nothing is moved and the person is asked to check.
+- In a chat export, the file name settles who the other person is, whatever the model read. Without
+  knowing who exported the chat, no name is placed on either side by role.
+- The customer's confirmed name for themselves and for people they dealt with before fills the draft
+  (WhatsApp only), with conflicts shown for review.
+
+### Chat exports
+
+A WhatsApp export is parsed without AI first (`app/chat_import.py`): participants, the owner where the file
+name or the customer's own names show it, and numbered messages (`[m12] p1 · 10:38 · text`). The model
+gets that transcript as source 1 and photos sent in the chat as sources 2 and up, under the same rules and
+schema as screenshots.
 
 ## Payment status
 

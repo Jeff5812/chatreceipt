@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.currencies import CURRENCY_CODES
 from app.models import PaymentStatus
@@ -17,6 +17,8 @@ from app.models import PaymentStatus
 CONFIDENCE_VALUES = ("high", "medium", "low")
 PAYMENT_STATUS_VALUES = tuple(status.value for status in PaymentStatus)
 ADJUSTMENT_KINDS = ("amount", "percent")
+OWNER_ROLES = ("seller", "buyer")
+PERSON_ROLES = ("seller", "buyer", "payer", "payee", "agent", "other")
 DAY_LABELS = ("", "today", "yesterday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 AMBIGUITY_FIELDS = (
     "currency",
@@ -103,6 +105,33 @@ EXTRACTION_SCHEMA: dict[str, Any] = _object(
         "currency": _field({"type": "string", "enum": [*CURRENCY_CODES, ""]}, "ISO currency code."),
         "seller": _field(_STRING, "Seller's name as shown in the conversation."),
         "buyer": _field(_STRING, "Buyer's name as shown in the conversation."),
+        "owner_role": _field(
+            {"type": "string", "enum": [*OWNER_ROLES, ""]},
+            "Whether the phone's owner, whose messages are on the right, is the seller or the buyer.",
+        ),
+        "other_party": _field(_STRING, "The other person's name, username or number as the top of the chat shows it."),
+        "people": {
+            "type": "array",
+            "description": "Everyone with a part in the deal, at most six.",
+            "items": _object(
+                {
+                    "name": {"type": "string", "description": "As the conversation shows it."},
+                    "role": {"type": "string", "enum": list(PERSON_ROLES)},
+                    "is_owner": {"type": "boolean", "description": "True for the phone's owner."},
+                    "quote": {"type": "string", "description": "Short verbatim text that shows their part."},
+                }
+            ),
+        },
+        "other_deals": {
+            "type": "array",
+            "description": "Other separate deals in the conversation, newest first. Empty when there is one.",
+            "items": _object(
+                {
+                    "summary": {"type": "string", "description": "One plain line: what, for how much, when."},
+                    "last_message": {"type": "string", "description": "Key of its last message in a chat export, such as m41; otherwise empty."},
+                }
+            ),
+        },
         "transaction_date": _field(_DATE, "Date the agreement was made."),
         "date_label": {
             "type": "string",
@@ -177,12 +206,33 @@ class AIAmbiguity(_AIModel):
     description: str
 
 
+class AIPerson(_AIModel):
+    name: str
+    role: str
+    is_owner: bool = False
+    quote: str = ""
+
+
+class AIOtherDeal(_AIModel):
+    summary: str
+    last_message: str = ""
+
+
+def _not_found() -> AIField:
+    return AIField(found=False, value="", confidence="low", evidence=[], note="")
+
+
 class AIExtraction(_AIModel):
     contains_transaction: bool
     summary: str
     currency: AIField
     seller: AIField
     buyer: AIField
+    # Optional when parsing, so an answer from before these fields existed still validates.
+    owner_role: AIField = Field(default_factory=_not_found)
+    other_party: AIField = Field(default_factory=_not_found)
+    people: list[AIPerson] = Field(default_factory=list)
+    other_deals: list[AIOtherDeal] = Field(default_factory=list)
     transaction_date: AIField
     date_label: str = ""
     due_date: AIField

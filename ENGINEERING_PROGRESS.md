@@ -21,6 +21,38 @@ A phase counts as complete only when it works and its tests pass.
 | 12 | Observability and performance | Complete, no load test | Structured events, request IDs, health and readiness, private metrics. No load testing was done |
 | 13 | Deployment and documentation | Deployed, two items open | Live since 2026-11-20 on free plans ([docs/deployment.md](docs/deployment.md)). The demonstration script and seed data are still to do |
 
+## Done on 2026-11-21
+
+Started on 2026-11-20 from the brief "Smart identity resolution, WhatsApp chat import and conversational
+intelligence", and finished after that session ran out of usage part-way through.
+
+- **Who is who** (`app/whatsapp/parties.py`, migration 0005):
+  - the extraction now reports the phone owner's side, the name at the top of the chat, everyone with a part in the deal (payer, payee, agent) and other deals in the same chat
+  - the customer's own name is asked once at Confirm, with their WhatsApp or export name one tap away, and remembered
+  - their side is asked only when the chat doesn't show it
+  - the people they deal with are remembered by phone number, or suggested by contact label, and conflicts are shown rather than overwritten
+  - saved records keep the customer's side, so "who still owes me?" lists money they owe separately
+- **WhatsApp chat exports:**
+  - `.txt` and `.zip`, Android and iPhone, parsed without AI (`app/chat_import.py`), with ZIP safety checks
+  - read on WhatsApp as a document, and on the website through `POST /api/extractions/chat`
+  - photos sent near the end of the chat are read with it
+  - "deal 1" (or a button on the website) reads the same export for another deal
+- **Conversation:**
+  - a **Clear history** button and `clear` command (records stay)
+  - "yes" and "no" are read against the question just asked
+  - typed name answers ("it's Tola's Bags")
+- **Website:**
+  - the upload step takes a chat export in the same drop area, and swapping between screenshots and an export is asked first
+  - the review step shows who is who with a "You" tag, a swap button, the payer, the chat export's participants and its other deals
+  - evidence is labelled "Chat" and "Photo 1" for exports
+- **Tests:** 749 backend tests pass, 110 of them new: identity and exports end to end (28), party rules (47), chat import (26) and the export endpoint (9). The existing WhatsApp flow tests now give both names by default, so they test what they did before.
+- **Checked with the real AI on `gemini-2.5-flash`:**
+  - 3 eval cases passed, including the owner's side and the other person's name
+  - one chat export was read correctly: two deals kept apart, a third-party payer, and the totals added up by the backend
+- **Deployment:**
+  - migration 0005 was applied to production on 2026-11-21; it is additive, and the API already running there stays ready with it
+  - the code is not deployed yet: it waits for a push to GitHub, then `scripts/render_deploy.py`
+
 ## Done on 2026-11-20
 
 - **Deployed on free plans:**

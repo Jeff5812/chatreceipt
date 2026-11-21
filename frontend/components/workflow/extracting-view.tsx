@@ -3,6 +3,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import type { Screenshot } from "@/lib/types";
 import { Button } from "../ui/button";
+import { ChatIcon } from "../ui/icons";
 import { ChitRunner } from "./chit-runner";
 import { StepHeading } from "./step-heading";
 
@@ -12,11 +13,13 @@ export function ExtractingView({
   phase,
   fraction,
   screenshots,
+  chatExport = null,
   onCancel,
 }: {
   phase: "uploading" | "reading";
   fraction: number;
   screenshots: Screenshot[];
+  chatExport?: File | null;
   onCancel: () => void;
 }) {
   const [elapsed, setElapsed] = useState(0);
@@ -41,8 +44,12 @@ export function ExtractingView({
         <div className="border-t border-line p-6">
           <p className="text-ui font-medium">
             {phase === "uploading"
-              ? `Uploading ${count} ${noun}… ${percent}%`
-              : "Finding the agreed items, prices and payment details…"}
+              ? chatExport
+                ? `Uploading the chat export… ${percent}%`
+                : `Uploading ${count} ${noun}… ${percent}%`
+              : chatExport
+                ? "Reading the chat: who is who, the deal, the agreed price and the payments…"
+                : "Finding the agreed items, prices and payment details…"}
           </p>
 
           {/* A segmented bar, like an old game's loading screen. */}
@@ -66,6 +73,13 @@ export function ExtractingView({
           <p className="mt-4 text-sm text-muted">
             This may take a minute.{elapsed >= 5 ? ` ${elapsed} seconds so far.` : ""}
           </p>
+
+          {chatExport && (
+            <p className="mt-5 flex items-center gap-2 font-mono text-caption text-muted">
+              <ChatIcon className="size-4 shrink-0 text-accent" />
+              <span className="truncate">{chatExport.name}</span>
+            </p>
+          )}
 
           {shown.length > 0 && (
             <ul aria-label="Screenshots being read" className="mt-5 flex items-end gap-2">
