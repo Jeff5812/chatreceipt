@@ -64,7 +64,7 @@ intelligence", and finished after that session ran out of usage part-way through
   - a file that can't be read gets no "Try again" button, since reading it again can't help
   - their own export name is marked *(you)*; "Paid by" never names the customer; the deal hint matches the number of deals; help gives the iPhone steps too
   - 764 backend tests pass
-- **After the strategy review** (built and tested, not deployed yet; migration 0006 not applied to production):
+- **After the strategy review** (deployed with the small fixes above on 2026-11-21, commit `61a52b9`):
   - **Payment checks.**
     - Money a saved record says was paid to the customer is a claim until they say it arrived: *Saved* asks, with *Yes, it's arrived* and *Not yet*.
     - "Who still owes me?" lists payments not in their account yet, and unchecked ones.
@@ -82,7 +82,18 @@ intelligence", and finished after that session ran out of usage part-way through
     - It can be added to an iPhone or Android home screen (manifest, icons, iPhone app settings).
     - A *Share the image* button opens the phone's share sheet, so a receipt goes straight into WhatsApp.
     - The records page shows payment checks and the other person's answers.
-  - **Tests:** 785 backend tests pass (21 new in `test_whatsapp_trust.py`). The frontend type check, lint and build are clean.
+  - **Tests:** 786 backend tests pass (22 new in `test_whatsapp_trust.py`). The frontend type check, lint and build are clean, and 2 real-AI eval cases pass with the new reading format.
+  - **Deploy order:** migration 0006 went to production first, and existing rows were untouched. Then `WHATSAPP_DISPLAY_NUMBER` was set on Render, with the other 17 variables unchanged. Then the push (Vercel built the website) and `scripts.render_deploy`.
+  - **Checked in production:**
+    - readiness: database, 6 migrations, worker
+    - the live API's schema has the new record fields
+    - the webhook refuses a wrong token (403) and a forged signature (401)
+    - records need a session (401)
+    - the website serves the manifest, the iPhone icon and the home-screen tags
+  - **Still to do:** a real-phone test of the new flows:
+    - the payment question on *Saved*
+    - a confirmation link opened from a second phone
+    - adding the website to an iPhone home screen and sharing a receipt image
 
 ## Done on 2026-11-20
 
