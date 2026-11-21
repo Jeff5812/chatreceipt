@@ -49,9 +49,14 @@ intelligence", and finished after that session ran out of usage part-way through
 - **Checked with the real AI on `gemini-2.5-flash`:**
   - 3 eval cases passed, including the owner's side and the other person's name
   - one chat export was read correctly: two deals kept apart, a third-party payer, and the totals added up by the backend
-- **Deployment:**
-  - migration 0005 was applied to production on 2026-11-21; it is additive, and the API already running there stays ready with it
-  - the code is not deployed yet: it waits for a push to GitHub, then `scripts/render_deploy.py`
+- **Deployed on 2026-11-21** (commit `a66fa43`): migration 0005 applied first, then the website on Vercel and the API on Render. Checked in production:
+  - readiness: database, migrations and worker
+  - `/api/config` shows the 30 MB export limit
+  - a non-chat file is refused (422), a broken ZIP too (400)
+  - the webhook refuses a wrong verify token (403) and a forged signature (401), and accepts a signed delivery (200)
+  - on the live website, a chat export was read end to end: the seller from the file name, "You" on the buyer, the sister shown as payer, and ₦25,000 / ₦10,000 / ₦15,000 added up by the backend
+  - **still to do:** a real chat export sent from a phone to the WhatsApp number
+- **Known cosmetic issue:** evidence quotes from an export can keep the transcript's prefix ("[m1] p1 · 10:38 · …").
 
 ## Done on 2026-11-20
 
